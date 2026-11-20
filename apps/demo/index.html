@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brush engine demo</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <aside class="panel left">
+      <h1>Brush engine</h1>
+      <p class="muted" id="version"></p>
+
+      <section>
+        <h2>File</h2>
+        <div class="row">
+          <label class="button">Open PLY / OBJ<input type="file" id="file" accept=".ply,.obj" hidden /></label>
+          <button id="sample">Sample</button>
+        </div>
+        <div class="row">
+          <button data-export="ply">PLY</button>
+          <button data-export="glb">GLB</button>
+          <button data-export="obj">OBJ</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Sculpt <span class="muted">(left drag)</span></h2>
+        <div class="tools" id="brushes"></div>
+        <label>Radius <input type="range" id="radius" min="0.02" max="1" step="0.01" value="0.2" /></label>
+        <label>Strength <input type="range" id="strength" min="0.05" max="1" step="0.05" value="0.5" /></label>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="invert" /> Invert</label>
+          <label class="check">Colour <input type="color" id="color" value="#c2410c" /></label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Whole mesh</h2>
+        <div class="tools" id="meshOps"></div>
+      </section>
+
+      <section>
+        <h2>View</h2>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="flat" /> Flat</label>
+          <label class="check"><input type="checkbox" id="wire" /> Wireframe</label>
+        </div>
+      </section>
+    </aside>
+
+    <main>
+      <canvas id="view"></canvas>
+      <div class="status" id="status"></div>
+    </main>
+
+    <aside class="panel right">
+      <section>
+        <h2>Mesh</h2>
+        <dl id="stats"></dl>
+        <div class="row">
+          <button id="undo" title="Ctrl+Z">Undo</button>
+          <button id="redo" title="Ctrl+Shift+Z">Redo</button>
+          <button id="revert">Revert</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Ops console</h2>
+        <p class="muted">Send any op as JSON, the way an AI model would. One op, or an array.</p>
+        <textarea id="console" spellcheck="false" rows="7"></textarea>
+        <div class="row">
+          <button id="run">Apply</button>
+          <button id="schema">Copy schema</button>
+        </div>
+        <p class="error" id="consoleError"></p>
+      </section>
+
+      <section class="grow">
+        <h2>Journal</h2>
+        <ol id="journal"></ol>
+      </section>
+    </aside>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

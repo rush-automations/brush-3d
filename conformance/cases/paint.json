@@ -1,0 +1,31 @@
+{
+  "expect": {
+    "faces": 72,
+    "hash": "9417b6b5145d0e98",
+    "vertices": 49
+  },
+  "fixture": "paint.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          2,
+          2,
+          3
+        ],
+        "yawDeg": 25
+      },
+      "color": [
+        1,
+        2,
+        250
+      ],
+      "op": "paint"
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "expect": {
+    "faces": 110,
+    "hash": "bbd1f965980c3efe",
+    "vertices": 78
+  },
+  "fixture": "remove.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          1.3,
+          2,
+          1.7
+        ],
+        "yawDeg": 33
+      },
+      "op": "removeBox"
+    },
+    {
+      "box": {
+        "center": [
+          2.5,
+          0,
+          2.5
+        ],
+        "size": [
+          4,
+          2,
+          4
+        ],
+        "yawDeg": 0
+      },
+      "invert": true,
+      "op": "removeBox"
+    }
+  ]
+}

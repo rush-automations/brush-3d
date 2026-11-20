@@ -1,0 +1,18 @@
+[package]
+name = "brush-engine"
+description = "The Brush engine facade: a document you edit with typed operations, with undo, redo and an append-only journal."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+brush-mesh.workspace = true
+brush-io.workspace = true
+brush-render.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+libm.workspace = true

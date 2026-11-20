@@ -1,0 +1,95 @@
+{
+  "expect": {
+    "faces": 1315,
+    "hash": "cb93e27ef6d5b6c9",
+    "vertices": 670
+  },
+  "fixture": "kitchen-sink.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          2,
+          2,
+          2
+        ],
+        "yawDeg": 0
+      },
+      "maxEdge": 0.15,
+      "op": "subdivide"
+    },
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          0.8,
+          2,
+          0.5
+        ],
+        "yawDeg": 12
+      },
+      "op": "carveBox"
+    },
+    {
+      "maxEdges": 200,
+      "op": "fillHoles"
+    },
+    {
+      "amplitude": 0.02,
+      "op": "roughen",
+      "scale": 0.3,
+      "seed": 5
+    },
+    {
+      "iterations": 2,
+      "op": "smooth",
+      "strength": 0.3
+    },
+    {
+      "box": {
+        "center": [
+          1,
+          0,
+          1
+        ],
+        "size": [
+          1,
+          2,
+          1
+        ],
+        "yawDeg": 0
+      },
+      "offset": [
+        0,
+        0.5,
+        0
+      ],
+      "op": "cloneBox",
+      "rotateDeg": 33
+    },
+    {
+      "mode": "shade",
+      "op": "tint",
+      "scale": 0.5,
+      "seed": 2,
+      "strength": 0.4
+    },
+    {
+      "cell": 0.1,
+      "op": "decimate"
+    },
+    {
+      "op": "bakeShadows",
+      "strength": 0.5
+    }
+  ]
+}

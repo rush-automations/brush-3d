@@ -1,0 +1,53 @@
+{
+  "expect": {
+    "faces": 76,
+    "hash": "dd70d27c02b7e137",
+    "vertices": 49
+  },
+  "fixture": "match.ply",
+  "ops": [
+    {
+      "maxEdge": 1,
+      "op": "subdivide"
+    },
+    {
+      "box": {
+        "center": [
+          2,
+          1,
+          2
+        ],
+        "size": [
+          1,
+          2,
+          1
+        ],
+        "yawDeg": 0
+      },
+      "color": [
+        255,
+        0,
+        0
+      ],
+      "op": "addBox"
+    },
+    {
+      "box": {
+        "center": [
+          2,
+          1,
+          2
+        ],
+        "size": [
+          1.4,
+          2.4,
+          1.4
+        ],
+        "yawDeg": 0
+      },
+      "maxDist": 3,
+      "op": "matchColor",
+      "strength": 0.7
+    }
+  ]
+}

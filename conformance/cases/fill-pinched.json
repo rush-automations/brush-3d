@@ -1,0 +1,44 @@
+{
+  "expect": {
+    "faces": 128,
+    "hash": "e67041b392a8b0a7",
+    "vertices": 81
+  },
+  "fixture": "fill.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          3,
+          0,
+          3
+        ],
+        "size": [
+          3.2,
+          1,
+          1.2
+        ]
+      },
+      "op": "removeBox"
+    },
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          4
+        ],
+        "size": [
+          1.2,
+          1,
+          3.2
+        ]
+      },
+      "op": "removeBox"
+    },
+    {
+      "maxEdges": 31,
+      "op": "fillHoles"
+    }
+  ]
+}

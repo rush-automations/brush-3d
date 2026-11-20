@@ -1,0 +1,18 @@
+[package]
+name = "brush-cli"
+description = "The `brush` command: inspect, convert, edit (with typed ops), render and replay meshes."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "brush"
+path = "src/main.rs"
+
+[dependencies]
+brush-engine.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+png.workspace = true

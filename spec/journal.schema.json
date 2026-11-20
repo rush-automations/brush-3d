@@ -1,0 +1,1284 @@
+{
+  "$defs": {
+    "Actor": {
+      "description": "Who made a change. Free-form so hosts can use their own ids (`\"user:42\"`, `\"model:brush-clean-1\"`).",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActorKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "ActorKind": {
+      "enum": [
+        "person",
+        "model",
+        "app"
+      ],
+      "type": "string"
+    },
+    "BoxRegion": {
+      "additionalProperties": false,
+      "description": "An oriented box: `center` and full `size` in meters, turned by `yawDeg` degrees about +y.",
+      "properties": {
+        "center": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "size": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "yawDeg": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "center",
+        "size"
+      ],
+      "type": "object"
+    },
+    "Brush": {
+      "oneOf": [
+        {
+          "const": "draw",
+          "description": "Raise the surface along its average normal (lower it with `invert`).",
+          "type": "string"
+        },
+        {
+          "const": "inflate",
+          "description": "Push each vertex out along its own normal: swells shapes (shrinks with `invert`).",
+          "type": "string"
+        },
+        {
+          "const": "smooth",
+          "description": "Relax toward the neighbours' average: removes bumps and noise.",
+          "type": "string"
+        },
+        {
+          "const": "flatten",
+          "description": "Pull vertices onto the plane that best fits the area under the brush.",
+          "type": "string"
+        },
+        {
+          "const": "pinch",
+          "description": "Pull vertices toward the brush centre along the surface: sharpens creases (spreads with `invert`).",
+          "type": "string"
+        },
+        {
+          "const": "paint",
+          "description": "Blend the vertex colours toward `color`.",
+          "type": "string"
+        }
+      ]
+    },
+    "Dab": {
+      "additionalProperties": false,
+      "description": "One brush touch. `pressure` (0..1) scales strength, as from a pen.",
+      "properties": {
+        "center": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 3,
+          "minItems": 3,
+          "type": "array"
+        },
+        "pressure": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "center"
+      ],
+      "type": "object"
+    },
+    "Op": {
+      "description": "One edit.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "Delete the faces whose centroid is inside the box, or with `invert` every face outside it. Vertices no face uses\nany more are dropped. Count: faces removed.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "invert": {
+              "default": false,
+              "type": "boolean"
+            },
+            "op": {
+              "const": "removeBox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "box"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Cut the box out of the surface. Triangles crossing its boundary are split along it, so the hole has exactly\nthe box's shape. Count: triangles cut or removed.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "op": {
+              "const": "carveBox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "box"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Smooth the surface inside the box (everywhere without one). The default Taubin method removes noise without\nshrinking the shape; `laplacian` relaxes harder and does shrink. Count: vertices moved.",
+          "properties": {
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "iterations": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "keepBoundary": {
+              "default": true,
+              "description": "Keep vertices on open edges (hole rims, outlines) where they are.",
+              "type": "boolean"
+            },
+            "method": {
+              "$ref": "#/$defs/SmoothMethod",
+              "default": "taubin"
+            },
+            "op": {
+              "const": "smooth",
+              "type": "string"
+            },
+            "strength": {
+              "default": 0.5,
+              "description": "0..1, how far each pass moves a vertex toward the average of its neighbours.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Merge vertices on a grid of `cell` meters: fast and uniform, but rounds off detail. Prefer `simplify`.\nCount: faces left.",
+          "properties": {
+            "cell": {
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "decimate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "cell"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Reduce the face count by collapsing the edges whose removal changes the shape least (quadric error metric),\nkeeping the surface manifold and its faces unflipped. Give `targetFaces` or `targetRatio` (0..1 of the current\ncount; default 0.5). Count: faces left.",
+          "properties": {
+            "keepBoundary": {
+              "default": true,
+              "description": "Keep open edges (hole rims, outlines) in shape.",
+              "type": "boolean"
+            },
+            "op": {
+              "const": "simplify",
+              "type": "string"
+            },
+            "targetFaces": {
+              "format": "uint32",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "targetRatio": {
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A brush stroke: each dab moves or recolours the vertices within `radius` of its centre, with a smooth falloff.\nDabs apply in order, so a stroke sent in pieces gives the same mesh as the whole stroke. Count: vertices\ntouched.",
+          "properties": {
+            "brush": {
+              "$ref": "#/$defs/Brush"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "description": "The paint brush's colour.",
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "dabs": {
+              "items": {
+                "$ref": "#/$defs/Dab"
+              },
+              "type": "array"
+            },
+            "invert": {
+              "default": false,
+              "description": "Lower instead of raise (draw, inflate) or spread instead of gather (pinch).",
+              "type": "boolean"
+            },
+            "op": {
+              "const": "sculpt",
+              "type": "string"
+            },
+            "radius": {
+              "description": "Meters.",
+              "format": "double",
+              "type": "number"
+            },
+            "strength": {
+              "default": 0.5,
+              "description": "0..1 per dab.",
+              "format": "double",
+              "type": "number"
+            },
+            "view": {
+              "description": "Direction the brush points (camera toward surface). Normals are turned to face it, so `draw` raises the\nsurface toward the person sculpting even where a scan's winding is unreliable.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "brush",
+            "dabs",
+            "radius"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Close holes (boundary loops of up to `maxEdges` edges). Each loop is triangulated in its best-fit plane by\near clipping, so concave holes close cleanly without new vertices. Count: faces added.",
+          "properties": {
+            "maxEdges": {
+              "default": 64,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "op": {
+              "const": "fillHoles",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Split edges longer than `maxEdge` meters (only inside the box when given) so flat faces can hold detail.\nCount: faces after.",
+          "properties": {
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "maxEdge": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxFaces": {
+              "default": 900000,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "op": {
+              "const": "subdivide",
+              "type": "string"
+            },
+            "passes": {
+              "default": 6,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "maxEdge"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Push vertices along their normals by fractal noise: chips, pitting, uneven stone. Count: vertices moved.",
+          "properties": {
+            "amplitude": {
+              "description": "Largest displacement, meters.",
+              "format": "double",
+              "type": "number"
+            },
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "edge": {
+              "default": 0.0,
+              "description": "Meters over which the effect eases off toward the box boundary.",
+              "format": "double",
+              "type": "number"
+            },
+            "octaves": {
+              "default": 4,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "op": {
+              "const": "roughen",
+              "type": "string"
+            },
+            "ridged": {
+              "default": false,
+              "description": "Crack-like ridges instead of soft lumps.",
+              "type": "boolean"
+            },
+            "scale": {
+              "description": "Feature size, meters.",
+              "format": "double",
+              "type": "number"
+            },
+            "seed": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "amplitude",
+            "scale"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Vary vertex colours with noise. Count: vertices changed.",
+          "properties": {
+            "a": {
+              "default": [
+                128,
+                128,
+                128
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "b": {
+              "default": [
+                128,
+                128,
+                128
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "mode": {
+              "$ref": "#/$defs/TintMode",
+              "default": "mix"
+            },
+            "octaves": {
+              "default": 3,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "op": {
+              "const": "tint",
+              "type": "string"
+            },
+            "scale": {
+              "format": "double",
+              "type": "number"
+            },
+            "seed": {
+              "default": 1,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "strength": {
+              "description": "0..1.",
+              "format": "double",
+              "type": "number"
+            },
+            "stretch": {
+              "default": [
+                1.0,
+                1.0,
+                1.0
+              ],
+              "description": "Stretches the noise per axis (a long x stretch gives wood grain).",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            }
+          },
+          "required": [
+            "op",
+            "scale",
+            "strength"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Bake ambient occlusion into the vertex colours. Run once. Count: vertices shaded.",
+          "properties": {
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cell": {
+              "default": 0.25,
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "bakeShadows",
+              "type": "string"
+            },
+            "radius": {
+              "default": 2.0,
+              "format": "double",
+              "type": "number"
+            },
+            "samples": {
+              "default": 24,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "strength": {
+              "default": 0.5,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Colour the vertices in the box from the nearest source vertex within `maxDist`: the document's reference mesh\nwith `fromReference`, otherwise this mesh's vertices outside the box. Count: vertices recoloured.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "fromReference": {
+              "default": false,
+              "type": "boolean"
+            },
+            "maxDist": {
+              "default": 1.0,
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "matchColor",
+              "type": "string"
+            },
+            "strength": {
+              "default": 1.0,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "box"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Copy the faces whose centre is in the box, moved by `offset`, turned about the box's vertical axis and\noptionally mirrored. Count: faces added.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "mirrorX": {
+              "default": false,
+              "type": "boolean"
+            },
+            "mirrorZ": {
+              "default": false,
+              "type": "boolean"
+            },
+            "offset": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "cloneBox",
+              "type": "string"
+            },
+            "rotateDeg": {
+              "default": 0.0,
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "box",
+            "offset"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Paint the vertices inside the box. Count: vertices painted.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "color": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "paint",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "box",
+            "color"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add a solid box filling `box`. Count: faces added.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "addBox",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "box"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add a ramp (a wedge) filling `box`: it rises from the bottom of the box's -z face to the top of its +z face, in\nthe box's own frame (so `yawDeg` turns the direction it climbs). Count: faces added.",
+          "properties": {
+            "box": {
+              "$ref": "#/$defs/BoxRegion"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "addRamp",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "box"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Place a linked instance of another object (`\"scan:<id>\"`) in the document's scene: the object's bounding-box\nbottom centre goes to `position`, scaled by `scale` and turned `yawDeg` degrees about +y. The instance points\nat the object rather than copying it, so when the object changes every instance of it changes too. Acts on a\ndocument's scene, not on a bare mesh. Count: 1.",
+          "properties": {
+            "id": {
+              "description": "Names the instance within this document; later ops refer to it.",
+              "type": "string"
+            },
+            "object": {
+              "type": "string"
+            },
+            "op": {
+              "const": "placeObject",
+              "type": "string"
+            },
+            "position": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "scale": {
+              "default": 1.0,
+              "format": "double",
+              "type": "number"
+            },
+            "yawDeg": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "object",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move, turn or scale a placed instance (the new values replace the old). Count: 1.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "op": {
+              "const": "moveObject",
+              "type": "string"
+            },
+            "position": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "scale": {
+              "default": 1.0,
+              "format": "double",
+              "type": "number"
+            },
+            "yawDeg": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "id",
+            "position"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Take a placed instance out of the scene. Count: 1.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "op": {
+              "const": "removeObject",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Turn a placed instance into ordinary geometry of the document's own mesh, where it can be sculpted and painted.\nIt no longer follows its object afterwards. Count: faces added.",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "op": {
+              "const": "bakeObject",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "id"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add an upright cylinder, cone or taper standing on `base`. Count: faces added.",
+          "properties": {
+            "base": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "height": {
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "addFrustum",
+              "type": "string"
+            },
+            "radiusBottom": {
+              "format": "double",
+              "type": "number"
+            },
+            "radiusTop": {
+              "format": "double",
+              "type": "number"
+            },
+            "segments": {
+              "default": 24,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "base",
+            "radiusBottom",
+            "radiusTop",
+            "height"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Add an ellipsoid. Count: faces added.",
+          "properties": {
+            "center": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "addSphere",
+              "type": "string"
+            },
+            "radii": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "rings": {
+              "default": 12,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "segments": {
+              "default": 24,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "center",
+            "radii"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Revolve a profile of [radius, height] pairs (2 to 256) about the vertical axis through `base`: columns, vases,\ndomes. Count: faces added.",
+          "properties": {
+            "base": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "capped": {
+              "default": true,
+              "type": "boolean"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "addLathe",
+              "type": "string"
+            },
+            "profile": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "segments": {
+              "default": 32,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "op",
+            "base",
+            "profile"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Extrude a floor plan of [x, z] points (3 to 512) straight up from `y0` by `height`. Count: faces added.",
+          "properties": {
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "height": {
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "addExtrude",
+              "type": "string"
+            },
+            "polygon": {
+              "items": {
+                "items": {
+                  "format": "double",
+                  "type": "number"
+                },
+                "maxItems": 2,
+                "minItems": 2,
+                "type": "array"
+              },
+              "type": "array"
+            },
+            "y0": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "polygon",
+            "y0",
+            "height"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "OpOutcome": {
+      "description": "What an op did. `count`'s meaning is given per op.",
+      "properties": {
+        "count": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "faces": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "vertices": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "count",
+        "vertices",
+        "faces"
+      ],
+      "type": "object"
+    },
+    "SmoothMethod": {
+      "oneOf": [
+        {
+          "const": "taubin",
+          "description": "Alternating shrink and inflate steps (Taubin λ|μ): smooths without losing volume.",
+          "type": "string"
+        },
+        {
+          "const": "laplacian",
+          "description": "Plain averaging with the neighbours: stronger, and shrinks the shape.",
+          "type": "string"
+        }
+      ]
+    },
+    "TintMode": {
+      "oneOf": [
+        {
+          "const": "mix",
+          "description": "Blend from colour `a` to `b` across the noise, mixed into what is there.",
+          "type": "string"
+        },
+        {
+          "const": "shade",
+          "description": "Only lighten and darken what is there (weathering, stains).",
+          "type": "string"
+        }
+      ]
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One line of the journal.",
+  "oneOf": [
+    {
+      "description": "An op was applied and changed the mesh.",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "event": {
+          "const": "applied",
+          "type": "string"
+        },
+        "hash": {
+          "description": "Content hash of the mesh after the op.",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/Op"
+        },
+        "outcome": {
+          "$ref": "#/$defs/OpOutcome"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "seq",
+        "op",
+        "outcome",
+        "hash"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "event": {
+          "const": "undo",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "seq",
+        "hash"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "event": {
+          "const": "redo",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "seq",
+        "hash"
+      ],
+      "type": "object"
+    },
+    {
+      "properties": {
+        "event": {
+          "const": "revert",
+          "type": "string"
+        },
+        "hash": {
+          "type": "string"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "seq",
+        "hash"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Entry"
+}

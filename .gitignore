@@ -1,0 +1,6 @@
+/target
+/bindings/wasm/pkg
+node_modules/
+dist/
+*.pyc
+__pycache__/

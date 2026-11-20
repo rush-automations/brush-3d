@@ -1,0 +1,42 @@
+{
+  "expect": {
+    "faces": 100,
+    "hash": "eb9ca28a82c34393",
+    "vertices": 153
+  },
+  "fixture": "carve.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          3,
+          0,
+          3
+        ],
+        "size": [
+          2.2,
+          3,
+          1.4
+        ],
+        "yawDeg": 17
+      },
+      "op": "carveBox"
+    },
+    {
+      "box": {
+        "center": [
+          1,
+          0,
+          1
+        ],
+        "size": [
+          0.7,
+          3,
+          0.7
+        ],
+        "yawDeg": -40
+      },
+      "op": "carveBox"
+    }
+  ]
+}

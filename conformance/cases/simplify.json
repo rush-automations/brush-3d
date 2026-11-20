@@ -1,0 +1,55 @@
+{
+  "expect": {
+    "faces": 442,
+    "hash": "e3050bbdb90d2b3b",
+    "vertices": 223
+  },
+  "fixture": "clone.ply",
+  "ops": [
+    {
+      "center": [
+        0,
+        1,
+        0
+      ],
+      "color": [
+        200,
+        120,
+        60
+      ],
+      "op": "addSphere",
+      "radii": [
+        1,
+        0.8,
+        1.2
+      ],
+      "rings": 24,
+      "segments": 48
+    },
+    {
+      "amplitude": 0.04,
+      "op": "roughen",
+      "scale": 0.3,
+      "seed": 11
+    },
+    {
+      "a": [
+        30,
+        60,
+        200
+      ],
+      "b": [
+        220,
+        200,
+        40
+      ],
+      "op": "tint",
+      "scale": 0.5,
+      "strength": 0.8
+    },
+    {
+      "op": "simplify",
+      "targetRatio": 0.2
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "expect": {
+    "faces": 640,
+    "hash": "7f9669346b9f6bd2",
+    "vertices": 337
+  },
+  "fixture": "subdivide.ply",
+  "ops": [
+    {
+      "maxEdge": 0.5,
+      "op": "subdivide"
+    },
+    {
+      "box": {
+        "center": [
+          1,
+          0,
+          1
+        ],
+        "size": [
+          1,
+          1,
+          1
+        ],
+        "yawDeg": 30
+      },
+      "maxEdge": 0.1,
+      "op": "subdivide",
+      "passes": 3
+    }
+  ]
+}

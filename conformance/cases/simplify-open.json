@@ -1,0 +1,19 @@
+{
+  "expect": {
+    "faces": 75,
+    "hash": "2106d3b527359ce3",
+    "vertices": 48
+  },
+  "fixture": "decimate.ply",
+  "ops": [
+    {
+      "op": "simplify",
+      "targetFaces": 150
+    },
+    {
+      "keepBoundary": false,
+      "op": "simplify",
+      "targetRatio": 0.5
+    }
+  ]
+}

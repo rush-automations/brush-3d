@@ -1,0 +1,22 @@
+{
+  "name": "brush-engine-demo",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A small editor that shows off the Brush engine in the browser.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "@types/three": "^0.186.0",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.2"
+  }
+}

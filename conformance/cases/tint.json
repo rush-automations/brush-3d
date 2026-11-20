@@ -1,0 +1,50 @@
+{
+  "expect": {
+    "faces": 288,
+    "hash": "71dbc4986d0ad339",
+    "vertices": 169
+  },
+  "fixture": "tint.ply",
+  "ops": [
+    {
+      "a": [
+        200,
+        30,
+        10
+      ],
+      "b": [
+        10,
+        40,
+        220
+      ],
+      "op": "tint",
+      "scale": 0.8,
+      "seed": 99,
+      "strength": 0.8,
+      "stretch": [
+        4,
+        1,
+        1
+      ]
+    },
+    {
+      "box": {
+        "center": [
+          1,
+          0,
+          1
+        ],
+        "size": [
+          1,
+          2,
+          1
+        ],
+        "yawDeg": 0
+      },
+      "mode": "shade",
+      "op": "tint",
+      "scale": 0.3,
+      "strength": 0.5
+    }
+  ]
+}

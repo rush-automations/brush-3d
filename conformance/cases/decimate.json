@@ -1,0 +1,14 @@
+{
+  "expect": {
+    "faces": 200,
+    "hash": "794fd77c473e843c",
+    "vertices": 118
+  },
+  "fixture": "decimate.ply",
+  "ops": [
+    {
+      "cell": 0.6,
+      "op": "decimate"
+    }
+  ]
+}

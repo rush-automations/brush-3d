@@ -1,0 +1,32 @@
+{
+  "expect": {
+    "faces": 200,
+    "hash": "a1d6930845a2775c",
+    "vertices": 121
+  },
+  "fixture": "smooth.ply",
+  "ops": [
+    {
+      "iterations": 4,
+      "op": "smooth",
+      "strength": 0.6
+    },
+    {
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          1.5,
+          2,
+          1.5
+        ],
+        "yawDeg": 10
+      },
+      "iterations": 2,
+      "op": "smooth"
+    }
+  ]
+}

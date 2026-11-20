@@ -1,0 +1,42 @@
+{
+  "expect": {
+    "faces": 1088,
+    "hash": "dfd6c5b2458c323a",
+    "vertices": 563
+  },
+  "fixture": "shadows.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          2,
+          1,
+          4.1
+        ],
+        "size": [
+          4,
+          2,
+          0.2
+        ],
+        "yawDeg": 0
+      },
+      "color": [
+        120,
+        120,
+        120
+      ],
+      "op": "addBox"
+    },
+    {
+      "maxEdge": 0.5,
+      "op": "subdivide"
+    },
+    {
+      "cell": 0.1,
+      "op": "bakeShadows",
+      "radius": 1.5,
+      "samples": 32,
+      "strength": 0.8
+    }
+  ]
+}

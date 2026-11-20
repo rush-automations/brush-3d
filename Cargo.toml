@@ -1,0 +1,35 @@
+[workspace]
+resolver = "2"
+members = ["crates/*", "bindings/wasm", "bindings/swift"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rush-automations/brush-3d"
+description = "Deterministic, cross-platform editing of PLY meshes and point clouds through typed operations."
+
+[workspace.dependencies]
+brush-mesh = { path = "crates/brush-mesh", version = "0.1.0" }
+brush-io = { path = "crates/brush-io", version = "0.1.0" }
+brush-render = { path = "crates/brush-render", version = "0.1.0" }
+brush-engine = { path = "crates/brush-engine", version = "0.1.0" }
+libm = "0.2"
+rustc-hash = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1"
+thiserror = "2"
+clap = { version = "4", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions"] }
+png = "0.17"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# Geometry is slow unoptimised; tests over real meshes stay quick with this.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.test]
+opt-level = 2

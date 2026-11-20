@@ -1,0 +1,97 @@
+{
+  "expect": {
+    "faces": 48,
+    "hash": "aa8cc099c8a0206d",
+    "vertices": 32
+  },
+  "fixture": "clone.ply",
+  "ops": [
+    {
+      "box": {
+        "center": [
+          0,
+          1,
+          0
+        ],
+        "size": [
+          1,
+          2,
+          1
+        ],
+        "yawDeg": 0
+      },
+      "color": [
+        200,
+        50,
+        50
+      ],
+      "op": "addBox"
+    },
+    {
+      "box": {
+        "center": [
+          0.5,
+          1,
+          0.5
+        ],
+        "size": [
+          3,
+          3,
+          3
+        ],
+        "yawDeg": 0
+      },
+      "offset": [
+        10,
+        0,
+        0
+      ],
+      "op": "cloneBox"
+    },
+    {
+      "box": {
+        "center": [
+          0.5,
+          1,
+          0.5
+        ],
+        "size": [
+          3,
+          3,
+          3
+        ],
+        "yawDeg": 15
+      },
+      "mirrorX": true,
+      "offset": [
+        0,
+        0,
+        10
+      ],
+      "op": "cloneBox",
+      "rotateDeg": 90
+    },
+    {
+      "box": {
+        "center": [
+          0,
+          1,
+          0
+        ],
+        "size": [
+          2,
+          3,
+          2
+        ],
+        "yawDeg": 0
+      },
+      "mirrorZ": true,
+      "offset": [
+        0,
+        3,
+        0
+      ],
+      "op": "cloneBox"
+    }
+  ]
+}

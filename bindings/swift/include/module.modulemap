@@ -1,0 +1,4 @@
+module BrushEngineFFI {
+    header "brush_engine.h"
+    export *
+}

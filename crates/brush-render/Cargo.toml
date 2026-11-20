@@ -1,0 +1,16 @@
+[package]
+name = "brush-render"
+description = "Rendering for the Brush engine. Today: the deterministic CPU rasteriser used headless and as a fallback; the wgpu viewport lands here next."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+brush-mesh.workspace = true
+serde.workspace = true
+schemars.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

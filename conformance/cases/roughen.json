@@ -1,0 +1,42 @@
+{
+  "expect": {
+    "faces": 2048,
+    "hash": "694019a9c631f617",
+    "vertices": 1089
+  },
+  "fixture": "roughen.ply",
+  "ops": [
+    {
+      "maxEdge": 0.2,
+      "op": "subdivide"
+    },
+    {
+      "amplitude": 0.05,
+      "octaves": 5,
+      "op": "roughen",
+      "scale": 0.4,
+      "seed": 7
+    },
+    {
+      "amplitude": 0.1,
+      "box": {
+        "center": [
+          2,
+          0,
+          2
+        ],
+        "size": [
+          2,
+          2,
+          2
+        ],
+        "yawDeg": 0
+      },
+      "edge": 0.3,
+      "op": "roughen",
+      "ridged": true,
+      "scale": 0.2,
+      "seed": 123456
+    }
+  ]
+}

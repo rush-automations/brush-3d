@@ -1,0 +1,16 @@
+{
+  "expect": {
+    "faces": 2048,
+    "hash": "df34768f57cc91ac",
+    "vertices": 1089
+  },
+  "fixture": "subdivide-cap.ply",
+  "ops": [
+    {
+      "maxEdge": 0.01,
+      "maxFaces": 3000,
+      "op": "subdivide",
+      "passes": 20
+    }
+  ]
+}

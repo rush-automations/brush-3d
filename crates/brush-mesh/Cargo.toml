@@ -1,0 +1,17 @@
+[package]
+name = "brush-mesh"
+description = "Geometry kernel of the Brush engine: an indexed triangle mesh with vertex colours and attributes, and the typed operations that edit it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libm.workspace = true
+rustc-hash.workspace = true
+serde.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+
