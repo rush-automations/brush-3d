@@ -711,3 +711,125 @@ fn ops_know_whether_they_change_topology() {
             .changes_topology()
     );
 }
+
+#[test]
+fn transform_moves_turns_and_scales_about_the_pivot() {
+    let mut m = floor4();
+    run(
+        &mut m,
+        json!({"op":"transform","translate":[1,2,3],"yawDeg":90,"scale":2}),
+    );
+    // yaw 90 about the origin, then translate: (x,z) -> (z,-x), scaled by 2.
+    let p = m.vert(0);
+    assert!((p[0] - 1.0).abs() < 1e-5 && (p[1] - 2.0).abs() < 1e-5 && (p[2] - 3.0).abs() < 1e-5);
+    let q = m.vert(1); // was (4,0,0)
+    assert!((q[0] - 1.0).abs() < 1e-5 && (q[1] - 2.0).abs() < 1e-5 && (q[2] - (-5.0)).abs() < 1e-5);
+    // Region transforms pivot on the box centre and leave the rest alone.
+    let mut n = floor4();
+    let moved = run(
+        &mut n,
+        json!({"op":"transform","box":{"center":[0,0,0],"size":[1,1,1]},"translate":[0,1,0]}),
+    );
+    assert_eq!(moved, 1);
+    assert_eq!(n.vert(3), [0.0, 0.0, 4.0]);
+    // Bad values are refused without touching the mesh.
+    let before = n.clone();
+    assert!(op(json!({"op":"transform","scale":0}))
+        .apply(&mut n, Context::default())
+        .is_err());
+    assert_eq!(n, before);
+}
+
+#[test]
+fn transform_carries_splats() {
+    let mut m = floor4();
+    run(
+        &mut m,
+        json!({"op":"splatPaint","dabs":[{"center":[2,0,2]}],"radius":0.5,"size":0.1,"view":[0,-1,0],"seed":3}),
+    );
+    let n0 = m.splats.len();
+    assert!(n0 > 0);
+    let c0 = m.splats.center(0);
+    run(&mut m, json!({"op":"transform","translate":[10,0,0]}));
+    let c1 = m.splats.center(0);
+    assert!((c1[0] - (c0[0] + 10.0)).abs() < 1e-4);
+    assert_eq!(m.splats.len(), n0);
+    // And removeBox takes the paint away with the surface.
+    run(
+        &mut m,
+        json!({"op":"removeBox","box":{"center":[12,0,2],"size":[20,20,20]}}),
+    );
+    assert_eq!(m.splats.len(), 0);
+}
+
+#[test]
+fn splat_paint_is_resolution_independent() {
+    // The same stroke on a coarse and a fine mesh stamps the same splats where the surfaces agree.
+    let mut coarse = grid(2);
+    let mut fine = grid(8);
+    let stroke = json!({"op":"splatPaint","dabs":[{"center":[1,0,1]}],"radius":0.8,"size":0.1,"seed":9,"view":[0,-1,0]});
+    run(&mut coarse, stroke.clone());
+    run(&mut fine, stroke);
+    assert_eq!(coarse.splats, fine.splats);
+    assert_eq!(coarse.face_count(), 8);
+    assert_eq!(fine.face_count(), 128);
+}
+
+#[test]
+fn splat_strokes_stream_like_sculpt_strokes() {
+    // A stroke sent in two pieces gives the same splats as the whole stroke at once.
+    let whole = json!({"op":"splatPaint","dabs":[{"center":[1,0,1]},{"center":[1.4,0,1.1]}],"radius":0.6,"size":0.1,"seed":4,"view":[0,-1,0]});
+    let first = json!({"op":"splatPaint","dabs":[{"center":[1,0,1]}],"radius":0.6,"size":0.1,"seed":4,"view":[0,-1,0]});
+    let second = json!({"op":"splatPaint","dabs":[{"center":[1.4,0,1.1]}],"radius":0.6,"size":0.1,"seed":5,"view":[0,-1,0]});
+    let mut a = grid(4);
+    let mut b = grid(4);
+    run(&mut a, whole);
+    run(&mut b, first);
+    run(&mut b, second);
+    assert_eq!(a.splats, b.splats);
+}
+
+#[test]
+fn splat_ops_validate_and_erase() {
+    let mut m = grid(4);
+    assert!(
+        op(json!({"op":"splatPaint","dabs":[],"radius":0,"size":0.1}))
+            .apply(&mut m, Context::default())
+            .is_err()
+    );
+    assert!(op(json!({"op":"splatErase","dabs":[],"radius":-1}))
+        .apply(&mut m, Context::default())
+        .is_err());
+    run(
+        &mut m,
+        json!({"op":"splatPaint","dabs":[{"center":[1,0,1]}],"radius":0.5,"size":0.1,"seed":2,"view":[0,-1,0]}),
+    );
+    let n = m.splats.len();
+    let gone = run(
+        &mut m,
+        json!({"op":"splatErase","dabs":[{"center":[1,0,1]}],"radius":2}),
+    );
+    assert_eq!(gone as usize, n);
+    assert!(m.splats.is_empty());
+}
+
+#[test]
+fn measure_reports_volume_area_and_closure() {
+    let mut m = Mesh::default();
+    run(
+        &mut m,
+        json!({"op":"addBox","box":{"center":[0,1,0],"size":[2,2,2]}}),
+    );
+    let mm = m.measure();
+    assert!(mm.closed);
+    assert!((mm.volume - 8.0).abs() < 1e-4, "{}", mm.volume);
+    assert!((mm.surface_area - 24.0).abs() < 1e-4, "{}", mm.surface_area);
+    assert!((mm.centroid[1] - 1.0).abs() < 1e-4);
+    assert_eq!(mm.splats, 0);
+    // An open sheet has no volume.
+    let sheet = grid(2);
+    let ms = sheet.measure();
+    assert!(!ms.closed);
+    assert_eq!(ms.volume, 0.0);
+    assert!((ms.surface_area - 4.0).abs() < 1e-4);
+}

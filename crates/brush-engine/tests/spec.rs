@@ -35,7 +35,7 @@ fn journal_schema_is_current() {
 fn every_op_in_the_schema_has_a_description() {
     let schema = brush_engine::mesh::ops_schema();
     let variants = schema["oneOf"].as_array().expect("ops are a oneOf");
-    assert_eq!(variants.len(), 24);
+    assert_eq!(variants.len(), 29, "op count changed: update this test");
     for v in variants {
         let name = &v["properties"]["op"];
         assert!(
