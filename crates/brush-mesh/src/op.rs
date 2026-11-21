@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any change to an op's meaning or fields. Additive changes (a new op, a new optional field) bump the
 /// minor version; anything else bumps the major.
-pub const OPS_VERSION: &str = "0.3.0";
+pub const OPS_VERSION: &str = "0.4.0";
 
 pub type Rgb = [u8; 3];
 
@@ -277,6 +277,93 @@ pub enum Op {
         #[serde(default = "light_grey")]
         color: Rgb,
     },
+    /// Stamp a stroke of Gaussian splats onto the surface: paint that lives in object space, independent of mesh
+    /// resolution. Each dab sprays a jittered grid of stamps within `radius`; with `align` every stamp is raycast
+    /// onto the surface along `view`, so paint wraps over bumps. A stamp landing on an earlier splat pours its
+    /// opacity into it (`flow` per pass), so going over a spot builds coverage like a real spray can instead of
+    /// stacking invisible layers. Count: stamps deposited.
+    SplatPaint {
+        dabs: Vec<crate::sculpt::Dab>,
+        /// Brush footprint radius, meters.
+        radius: f64,
+        /// Splat radius (Gaussian sigma), meters.
+        size: f64,
+        /// Distance between stamp centres; defaults to `size`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        spacing: Option<f64>,
+        #[serde(default = "light_grey")]
+        color: Rgb,
+        /// 0..1: opacity of a full-coverage stamp.
+        #[serde(default = "one_f")]
+        opacity: f64,
+        /// 0..1: how much of `opacity` one pass deposits; the rest builds up on later passes.
+        #[serde(default = "half")]
+        flow: f64,
+        /// 0..1: per-stamp size and opacity jitter, so dense strokes look organic rather than gridded.
+        #[serde(default)]
+        variation: f64,
+        /// 0..1: noise-driven lightening and darkening per stamp (weathering, mottling).
+        #[serde(default)]
+        color_noise: f64,
+        /// 0..1: how far fresh paint runs downward along the surface, like wet paint.
+        #[serde(default)]
+        drip: f64,
+        #[serde(default)]
+        seed: u32,
+        /// Spray direction (camera toward surface). Default: straight down.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        view: Option<[f64; 3]>,
+        /// Snap stamps onto the surface. With false they stay in the dab's tangent plane.
+        #[serde(default = "yes")]
+        align: bool,
+    },
+    /// Remove the splats within `radius` of any dab (pressure scales the radius): the eraser end of the brush.
+    /// Count: splats removed.
+    SplatErase {
+        dabs: Vec<crate::sculpt::Dab>,
+        /// Meters.
+        radius: f64,
+    },
+    /// Blend the splats inside the box (everywhere without one) toward `color`. Count: splats recoloured.
+    SplatTint {
+        #[serde(rename = "box", default, skip_serializing_if = "Option::is_none")]
+        region: Option<BoxRegion>,
+        color: Rgb,
+        /// 0..1.
+        #[serde(default = "half")]
+        strength: f64,
+    },
+    /// Pour the splats into the vertex colours: each vertex near a splat is blended toward it, weighted by the
+    /// splat's Gaussian and opacity. The bridge back to vertex colours for tools that only read those. With
+    /// `clear` the splats are removed afterwards. Count: vertices recoloured.
+    SplatBake {
+        /// How far a splat reaches, meters. 0 (the default) means twice the mean splat radius, which covers
+        /// seamlessly at any brush size.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        radius: f64,
+        /// 0..1.
+        #[serde(default = "one_f")]
+        strength: f64,
+        #[serde(default)]
+        clear: bool,
+    },
+    /// Move, turn and scale the mesh (or just the part inside `box`) about a pivot — the box's centre, or the world
+    /// origin without one. Rotation applies roll (about +z), then pitch (about +x), then yaw (about +y). Splats in
+    /// the region move, turn and scale with the surface. Count: vertices moved.
+    Transform {
+        #[serde(rename = "box", default, skip_serializing_if = "Option::is_none")]
+        region: Option<BoxRegion>,
+        #[serde(default, skip_serializing_if = "is_zero3")]
+        translate: [f64; 3],
+        #[serde(default, skip_serializing_if = "is_zero")]
+        yaw_deg: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        pitch_deg: f64,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        roll_deg: f64,
+        #[serde(default = "one_f", skip_serializing_if = "is_one")]
+        scale: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -301,6 +388,12 @@ pub enum TintMode {
 
 fn is_zero(v: &f64) -> bool {
     *v == 0.0
+}
+fn is_zero3(v: &[f64; 3]) -> bool {
+    *v == [0.0; 3]
+}
+fn is_one(v: &f64) -> bool {
+    *v == 1.0
 }
 fn one() -> u32 {
     1
@@ -361,6 +454,23 @@ pub struct OpOutcome {
     pub count: u64,
     pub vertices: u64,
     pub faces: u64,
+}
+
+/// The size of a mesh, as [`Mesh::measure`] reports it: volume (exact for a closed surface, 0 otherwise), surface
+/// area, the area-weighted centroid, whether the surface is closed, and how many splats it carries.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Measure {
+    /// Cubic meters, meaningful when `closed`.
+    pub volume: f64,
+    /// Square meters.
+    pub surface_area: f64,
+    /// Where the surface area balances, meters.
+    pub centroid: [f64; 3],
+    /// No boundary edges: the surface is watertight and `volume` is exact.
+    pub closed: bool,
+    /// Paint splats on the surface.
+    pub splats: u64,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -459,6 +569,11 @@ impl Op {
             Op::AddSphere { .. } => "addSphere",
             Op::AddLathe { .. } => "addLathe",
             Op::AddExtrude { .. } => "addExtrude",
+            Op::SplatPaint { .. } => "splatPaint",
+            Op::SplatErase { .. } => "splatErase",
+            Op::SplatTint { .. } => "splatTint",
+            Op::SplatBake { .. } => "splatBake",
+            Op::Transform { .. } => "transform",
         }
     }
 
@@ -638,6 +753,90 @@ impl Op {
                     .flatten()
                     .try_for_each(|&v| finite("polygon", v).map(|_| ()))
             }
+            Op::SplatPaint {
+                dabs,
+                radius,
+                size,
+                spacing,
+                opacity,
+                flow,
+                variation,
+                color_noise,
+                drip,
+                view,
+                ..
+            } => {
+                if finite("radius", *radius)? <= 0.0 {
+                    return Err(OpError::Invalid("radius must be positive".into()));
+                }
+                if finite("size", *size)? <= 0.0 {
+                    return Err(OpError::Invalid("size must be positive".into()));
+                }
+                if let Some(s) = spacing {
+                    if finite("spacing", *s)? <= 0.0 {
+                        return Err(OpError::Invalid("spacing must be positive".into()));
+                    }
+                }
+                finite("opacity", *opacity)?;
+                finite("flow", *flow)?;
+                finite("variation", *variation)?;
+                finite("colorNoise", *color_noise)?;
+                finite("drip", *drip)?;
+                if let Some(v) = view {
+                    v.iter().try_for_each(|&x| finite("view", x).map(|_| ()))?;
+                }
+                dabs.iter().try_for_each(|d| {
+                    d.center
+                        .iter()
+                        .try_for_each(|&v| finite("dab center", v).map(|_| ()))?;
+                    finite("pressure", d.pressure).map(|_| ())
+                })
+            }
+            Op::SplatErase { dabs, radius } => {
+                if finite("radius", *radius)? <= 0.0 {
+                    return Err(OpError::Invalid("radius must be positive".into()));
+                }
+                dabs.iter().try_for_each(|d| {
+                    d.center
+                        .iter()
+                        .try_for_each(|&v| finite("dab center", v).map(|_| ()))?;
+                    finite("pressure", d.pressure).map(|_| ())
+                })
+            }
+            Op::SplatTint {
+                region, strength, ..
+            } => {
+                opt(region)?;
+                finite("strength", *strength).map(|_| ())
+            }
+            Op::SplatBake {
+                radius, strength, ..
+            } => {
+                if finite("radius", *radius)? < 0.0 {
+                    return Err(OpError::Invalid("radius must not be negative".into()));
+                }
+                finite("strength", *strength).map(|_| ())
+            }
+            Op::Transform {
+                region,
+                translate,
+                yaw_deg,
+                pitch_deg,
+                roll_deg,
+                scale,
+            } => {
+                opt(region)?;
+                translate
+                    .iter()
+                    .try_for_each(|&v| finite("translate", v).map(|_| ()))?;
+                finite("yawDeg", *yaw_deg)?;
+                finite("pitchDeg", *pitch_deg)?;
+                finite("rollDeg", *roll_deg)?;
+                if finite("scale", *scale)? <= 0.0 {
+                    return Err(OpError::Invalid("scale must be positive".into()));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -652,8 +851,8 @@ impl Op {
         )
     }
 
-    /// Whether the op can add, remove or rewire faces (as opposed to only moving vertices or changing colours).
-    /// Caches keyed on connectivity (a BVH, sculpt topology) survive the ops for which this is false.
+    /// Whether the op can add, remove or rewire faces (as opposed to only moving vertices, changing colours or
+    /// editing splats). Caches keyed on connectivity (a BVH, sculpt topology) survive the ops for which this is false.
     pub fn changes_topology(&self) -> bool {
         !matches!(
             self,
@@ -667,6 +866,11 @@ impl Op {
                 | Op::PlaceObject { .. }
                 | Op::MoveObject { .. }
                 | Op::RemoveObject { .. }
+                | Op::SplatPaint { .. }
+                | Op::SplatErase { .. }
+                | Op::SplatTint { .. }
+                | Op::SplatBake { .. }
+                | Op::Transform { .. }
         )
     }
 
@@ -895,6 +1099,79 @@ impl Op {
                     polygon.iter().map(|p| [p[0] as f32, p[1] as f32]).collect();
                 mesh.add_extrude(&pts, *y0 as f32, *height as f32, *color);
                 mesh.face_count() - f0
+            }
+            Op::SplatPaint {
+                dabs,
+                radius,
+                size,
+                spacing,
+                color,
+                opacity,
+                flow,
+                variation,
+                color_noise,
+                drip,
+                seed,
+                view,
+                align,
+            } => {
+                let d: Vec<([f32; 3], f32)> = dabs
+                    .iter()
+                    .map(|d| (f3(d.center), d.pressure as f32))
+                    .collect();
+                mesh.splat_paint(
+                    &d,
+                    *radius as f32,
+                    spacing.unwrap_or(*size) as f32,
+                    *size as f32,
+                    *color,
+                    *opacity as f32,
+                    *flow as f32,
+                    *variation as f32,
+                    *color_noise as f32,
+                    *drip as f32,
+                    *seed,
+                    view.map(f3),
+                    *align,
+                )
+            }
+            Op::SplatErase { dabs, radius } => {
+                let d: Vec<([f32; 3], f32)> = dabs
+                    .iter()
+                    .map(|d| (f3(d.center), d.pressure as f32))
+                    .collect();
+                mesh.splat_erase(&d, *radius as f32)
+            }
+            Op::SplatTint {
+                region,
+                color,
+                strength,
+            } => mesh.splat_tint(area(region.as_ref()), *color, *strength as f32),
+            Op::SplatBake {
+                radius,
+                strength,
+                clear,
+            } => mesh.splat_bake(*radius as f32, *strength as f32, *clear),
+            Op::Transform {
+                region,
+                translate,
+                yaw_deg,
+                pitch_deg,
+                roll_deg,
+                scale,
+            } => {
+                let a = area(region.as_ref());
+                // The pivot: the box's centre, or the world origin when transforming everything.
+                let pivot = region.map_or([0.0; 3], |b| f3(b.center));
+                mesh.transform(
+                    a,
+                    f3(*translate),
+                    rad(*roll_deg),
+                    rad(*pitch_deg),
+                    rad(*yaw_deg),
+                    *scale as f32,
+                    pivot,
+                )
             }
         };
         Ok(OpOutcome {
