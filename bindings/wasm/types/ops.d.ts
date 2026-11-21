@@ -1,4 +1,4 @@
-/* Generated from spec/ops.schema.json by json-schema-to-typescript. Do not edit; run bun run types. */
+/* Generated from spec/ops.schema.json by json-schema-to-typescript. Do not edit; run npm run types. */
 
 /**
  * One edit.
@@ -285,6 +285,106 @@ export type BrushEngineOperation =
       op: "addExtrude";
       polygon: [number, number][];
       y0: number;
+    }
+  | {
+      /**
+       * Snap stamps onto the surface. With false they stay in the dab's tangent plane.
+       */
+      align?: boolean;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      color?: [number, number, number];
+      /**
+       * 0..1: noise-driven lightening and darkening per stamp (weathering, mottling).
+       */
+      colorNoise?: number;
+      dabs: Dab[];
+      /**
+       * 0..1: how far fresh paint runs downward along the surface, like wet paint.
+       */
+      drip?: number;
+      /**
+       * 0..1: how much of `opacity` one pass deposits; the rest builds up on later passes.
+       */
+      flow?: number;
+      op: "splatPaint";
+      /**
+       * 0..1: opacity of a full-coverage stamp.
+       */
+      opacity?: number;
+      /**
+       * Brush footprint radius, meters.
+       */
+      radius: number;
+      seed?: number;
+      /**
+       * Splat radius (Gaussian sigma), meters.
+       */
+      size: number;
+      /**
+       * Distance between stamp centres; defaults to `size`.
+       */
+      spacing?: number | null;
+      /**
+       * 0..1: per-stamp size and opacity jitter, so dense strokes look organic rather than gridded.
+       */
+      variation?: number;
+      /**
+       * Spray direction (camera toward surface). Default: straight down.
+       *
+       * @minItems 3
+       * @maxItems 3
+       */
+      view?: [number, number, number] | null;
+    }
+  | {
+      dabs: Dab[];
+      op: "splatErase";
+      /**
+       * Meters.
+       */
+      radius: number;
+    }
+  | {
+      box?: BoxRegion | null;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      color: [number, number, number];
+      op: "splatTint";
+      /**
+       * 0..1.
+       */
+      strength?: number;
+    }
+  | {
+      clear?: boolean;
+      op: "splatBake";
+      /**
+       * How far a splat reaches, meters. 0 (the default) means twice the mean splat radius, which covers
+       * seamlessly at any brush size.
+       */
+      radius?: number;
+      /**
+       * 0..1.
+       */
+      strength?: number;
+    }
+  | {
+      box?: BoxRegion | null;
+      op: "transform";
+      pitchDeg?: number;
+      rollDeg?: number;
+      scale?: number;
+      /**
+       * @minItems 3
+       * @maxItems 3
+       */
+      translate?: [number, number, number];
+      yawDeg?: number;
     };
 export type Brush = "draw" | "inflate" | "smooth" | "flatten" | "pinch" | "paint";
 

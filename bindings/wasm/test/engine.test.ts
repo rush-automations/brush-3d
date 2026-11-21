@@ -68,8 +68,8 @@ test('errors are thrown and leave the mesh alone', () => {
 });
 
 test('the schema and versions are exposed', () => {
-  expect(version().ops).toBe('0.3.0');
-  expect((opsSchema() as { oneOf: unknown[] }).oneOf).toHaveLength(24);
+  expect(version().ops).toBe('0.4.0');
+  expect((opsSchema() as { oneOf: unknown[] }).oneOf).toHaveLength(29);
 });
 
 test('a read-only document views but never edits or journals', () => {
