@@ -1117,6 +1117,264 @@
             "height"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Stamp a stroke of Gaussian splats onto the surface: paint that lives in object space, independent of mesh\nresolution. Each dab sprays a jittered grid of stamps within `radius`; with `align` every stamp is raycast\nonto the surface along `view`, so paint wraps over bumps. A stamp landing on an earlier splat pours its\nopacity into it (`flow` per pass), so going over a spot builds coverage like a real spray can instead of\nstacking invisible layers. Count: stamps deposited.",
+          "properties": {
+            "align": {
+              "default": true,
+              "description": "Snap stamps onto the surface. With false they stay in the dab's tangent plane.",
+              "type": "boolean"
+            },
+            "color": {
+              "default": [
+                180,
+                180,
+                180
+              ],
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "colorNoise": {
+              "default": 0.0,
+              "description": "0..1: noise-driven lightening and darkening per stamp (weathering, mottling).",
+              "format": "double",
+              "type": "number"
+            },
+            "dabs": {
+              "items": {
+                "$ref": "#/$defs/Dab"
+              },
+              "type": "array"
+            },
+            "drip": {
+              "default": 0.0,
+              "description": "0..1: how far fresh paint runs downward along the surface, like wet paint.",
+              "format": "double",
+              "type": "number"
+            },
+            "flow": {
+              "default": 0.5,
+              "description": "0..1: how much of `opacity` one pass deposits; the rest builds up on later passes.",
+              "format": "double",
+              "type": "number"
+            },
+            "op": {
+              "const": "splatPaint",
+              "type": "string"
+            },
+            "opacity": {
+              "default": 1.0,
+              "description": "0..1: opacity of a full-coverage stamp.",
+              "format": "double",
+              "type": "number"
+            },
+            "radius": {
+              "description": "Brush footprint radius, meters.",
+              "format": "double",
+              "type": "number"
+            },
+            "seed": {
+              "default": 0,
+              "format": "uint32",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "size": {
+              "description": "Splat radius (Gaussian sigma), meters.",
+              "format": "double",
+              "type": "number"
+            },
+            "spacing": {
+              "description": "Distance between stamp centres; defaults to `size`.",
+              "format": "double",
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "variation": {
+              "default": 0.0,
+              "description": "0..1: per-stamp size and opacity jitter, so dense strokes look organic rather than gridded.",
+              "format": "double",
+              "type": "number"
+            },
+            "view": {
+              "description": "Spray direction (camera toward surface). Default: straight down.",
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "op",
+            "dabs",
+            "radius",
+            "size"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Remove the splats within `radius` of any dab (pressure scales the radius): the eraser end of the brush.\nCount: splats removed.",
+          "properties": {
+            "dabs": {
+              "items": {
+                "$ref": "#/$defs/Dab"
+              },
+              "type": "array"
+            },
+            "op": {
+              "const": "splatErase",
+              "type": "string"
+            },
+            "radius": {
+              "description": "Meters.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "dabs",
+            "radius"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Blend the splats inside the box (everywhere without one) toward `color`. Count: splats recoloured.",
+          "properties": {
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "color": {
+              "items": {
+                "format": "uint8",
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "op": {
+              "const": "splatTint",
+              "type": "string"
+            },
+            "strength": {
+              "default": 0.5,
+              "description": "0..1.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op",
+            "color"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Pour the splats into the vertex colours: each vertex near a splat is blended toward it, weighted by the\nsplat's Gaussian and opacity. The bridge back to vertex colours for tools that only read those. With\n`clear` the splats are removed afterwards. Count: vertices recoloured.",
+          "properties": {
+            "clear": {
+              "default": false,
+              "type": "boolean"
+            },
+            "op": {
+              "const": "splatBake",
+              "type": "string"
+            },
+            "radius": {
+              "description": "How far a splat reaches, meters. 0 (the default) means twice the mean splat radius, which covers\nseamlessly at any brush size.",
+              "format": "double",
+              "type": "number"
+            },
+            "strength": {
+              "default": 1.0,
+              "description": "0..1.",
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Move, turn and scale the mesh (or just the part inside `box`) about a pivot — the box's centre, or the world\norigin without one. Rotation applies roll (about +z), then pitch (about +x), then yaw (about +y). Splats in\nthe region move, turn and scale with the surface. Count: vertices moved.",
+          "properties": {
+            "box": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/BoxRegion"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "op": {
+              "const": "transform",
+              "type": "string"
+            },
+            "pitchDeg": {
+              "format": "double",
+              "type": "number"
+            },
+            "rollDeg": {
+              "format": "double",
+              "type": "number"
+            },
+            "scale": {
+              "format": "double",
+              "type": "number"
+            },
+            "translate": {
+              "items": {
+                "format": "double",
+                "type": "number"
+              },
+              "maxItems": 3,
+              "minItems": 3,
+              "type": "array"
+            },
+            "yawDeg": {
+              "format": "double",
+              "type": "number"
+            }
+          },
+          "required": [
+            "op"
+          ],
+          "type": "object"
         }
       ]
     },

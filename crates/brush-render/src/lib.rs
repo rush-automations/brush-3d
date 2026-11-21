@@ -116,6 +116,9 @@ pub fn render(mesh: &Mesh, width: u32, height: u32, cam: &Camera) -> Vec<u8> {
             );
         }
     }
+    render_splats(
+        mesh, wi, hi, &mut depth, &mut frame, right, up, fwd, eye, f, aspect, key,
+    );
     frame
 }
 
@@ -171,6 +174,166 @@ fn raster_tri(
                 let c = (w0 * iz[0] * v[0].c[j] + w1 * iz[1] * v[1].c[j] + w2 * iz[2] * v[2].c[j])
                     / inv;
                 frame[o * 4 + j] = (c * light).clamp(0.0, 255.0) as u8;
+            }
+        }
+    }
+}
+
+// ---- splats ----
+
+/// A splat projected into the view, with its screen-space Gaussian.
+struct SplatView {
+    center: [f32; 2],
+    depth: f32,
+    /// Inverse of the 2x2 screen covariance, row-major.
+    inv: [f32; 3],
+    /// Radius of the rasterised box around the centre, pixels.
+    reach: [f32; 2],
+    color: [u8; 3],
+    opacity: f32,
+    light: f32,
+}
+
+/// The unit vector orthogonal to `n` chosen the same way as in the kernel, so both see the same splat shape.
+fn tangent(n: Vec3) -> Vec3 {
+    let axis = if n[0].abs() < 0.9 {
+        [1.0, 0.0, 0.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    norm(cross(n, axis))
+}
+
+/// Projects each splat to a screen-space Gaussian and composites them back-to-front over the rasterised mesh.
+/// The maths is the kernel's (libm, fixed order), so a render here matches a render anywhere.
+#[allow(clippy::too_many_arguments)]
+fn render_splats(
+    mesh: &Mesh,
+    wi: usize,
+    hi: usize,
+    depth: &mut [f32],
+    frame: &mut [u8],
+    right: Vec3,
+    up: Vec3,
+    fwd: Vec3,
+    eye: Vec3,
+    f: f32,
+    aspect: f32,
+    key: Vec3,
+) {
+    let n = mesh.splats.len();
+    if n == 0 {
+        return;
+    }
+    let (wf, hf) = (wi as f32, hi as f32);
+    // Back to front by view depth; ties keep splat order, so compositing is deterministic.
+    let mut order: Vec<u32> = (0..n as u32).collect();
+    let view_z = |i: u32| {
+        let c = mesh.splats.center(i as usize);
+        let d = sub(c, eye);
+        dot(d, fwd)
+    };
+    let zs: Vec<f32> = order.iter().map(|&i| view_z(i)).collect();
+    let mut indexed: Vec<(u32, f32)> = order.drain(..).zip(zs).collect();
+    indexed.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    for (i, z) in indexed {
+        if z < NEAR {
+            continue;
+        }
+        let i = i as usize;
+        let c = mesh.splats.center(i);
+        let d = sub(c, eye);
+        let cv = [dot(d, right), dot(d, up), z];
+        let sx = (cv[0] * f / (z * aspect) * 0.5 + 0.5) * wf;
+        let sy = (0.5 - cv[1] * f / z * 0.5) * hf;
+        let normal = mesh.splats.normal(i);
+        let r = mesh.splats.radii[i];
+        let t1 = tangent(normal);
+        let t2 = norm(cross(normal, t1));
+        // Drip elongation: gravity projected onto the splat's tangent plane.
+        let g = [0.0f32, -1.0, 0.0];
+        let along = dot(g, normal);
+        let gd0 = [
+            g[0] - normal[0] * along,
+            g[1] - normal[1] * along,
+            g[2] - normal[2] * along,
+        ];
+        let has_drip = mesh.splats.drips[i] > 0.0 && dot(gd0, gd0) > 1e-12;
+        let gd = if has_drip { norm(gd0) } else { [0.0; 3] };
+        let rd = r * mesh.splats.drips[i];
+        // Screen covariance Σ = J C Jᵀ from the world basis, linearised at the splat's depth.
+        let vx = |w: Vec3| dot(w, right);
+        let vy = |w: Vec3| dot(w, up);
+        let (t1x, t1y) = (vx(t1), vy(t1));
+        let (t2x, t2y) = (vx(t2), vy(t2));
+        let (gdx, gdy) = (vx(gd), vy(gd));
+        let cxx = r * r * (t1x * t1x + t2x * t2x) + rd * rd * gdx * gdx;
+        let cxy = r * r * (t1x * t1y + t2x * t2y) + rd * rd * gdx * gdy;
+        let cyy = r * r * (t1y * t1y + t2y * t2y) + rd * rd * gdy * gdy;
+        let k1 = f * 0.5 * wf / (z * aspect);
+        let k2 = f * 0.5 * hf / z;
+        let a = k1 * k1 * cxx;
+        let b = -k1 * k2 * cxy;
+        let cc = k2 * k2 * cyy;
+        let det = a * cc - b * b;
+        if det < 1e-12 {
+            continue;
+        }
+        let inv = [cc / det, -b / det, a / det];
+        let reach = [
+            2.5 * brush_mesh::math::sqrt(a),
+            2.5 * brush_mesh::math::sqrt(cc),
+        ];
+        let nrm = normal;
+        let face_n = if dot(nrm, fwd) > 0.0 {
+            [-nrm[0], -nrm[1], -nrm[2]]
+        } else {
+            nrm
+        };
+        let light = 0.35 + 0.45 * (-dot(face_n, fwd)).max(0.0) + 0.2 * dot(face_n, key).max(0.0);
+        let sv = SplatView {
+            center: [sx, sy],
+            depth: z,
+            inv,
+            reach,
+            color: mesh.splats.color(i),
+            opacity: mesh.splats.opacities[i] as f32 / 255.0,
+            light,
+        };
+        raster_splat(wi, hi, depth, frame, &sv);
+    }
+}
+
+/// Composites one Gaussian over the frame. Depth is tested against the mesh but not written: paint does not hide
+/// paint behind it.
+fn raster_splat(wi: usize, hi: usize, depth: &mut [f32], frame: &mut [u8], s: &SplatView) {
+    let fl = |x: f32| brush_mesh::math::floor(x) as i32;
+    let ce = |x: f32| brush_mesh::math::ceil(x) as i32;
+    let minx = fl(s.center[0] - s.reach[0]).max(0);
+    let maxx = ce(s.center[0] + s.reach[0]).min(wi as i32 - 1);
+    let miny = fl(s.center[1] - s.reach[1]).max(0);
+    let maxy = ce(s.center[1] + s.reach[1]).min(hi as i32 - 1);
+    for py in miny..=maxy {
+        for px in minx..=maxx {
+            let qx = px as f32 + 0.5 - s.center[0];
+            let qy = py as f32 + 0.5 - s.center[1];
+            let m = qx * (s.inv[0] * qx + s.inv[1] * qy) + qy * (s.inv[1] * qx + s.inv[2] * qy);
+            if m > 6.25 {
+                continue;
+            }
+            let o = py as usize * wi + px as usize;
+            if s.depth >= depth[o] {
+                continue;
+            }
+            let alpha = s.opacity * brush_mesh::math::exp(-0.5 * m);
+            if alpha <= 0.0 {
+                continue;
+            }
+            for j in 0..3 {
+                let dst = frame[o * 4 + j] as f32;
+                let src = (s.color[j] as f32 * s.light).clamp(0.0, 255.0);
+                frame[o * 4 + j] =
+                    brush_mesh::math::round(dst + (src - dst) * alpha).clamp(0.0, 255.0) as u8;
             }
         }
     }

@@ -1,5 +1,9 @@
 # Brush 3D
 
+[![engine](https://github.com/rush-automations/brush-3d/actions/workflows/ci.yml/badge.svg)](https://github.com/rush-automations/brush-3d/actions/workflows/ci.yml)
+[![demo](https://github.com/rush-automations/brush-3d/actions/workflows/pages.yml/badge.svg)](https://github.com/rush-automations/brush-3d/actions/workflows/pages.yml)
+[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE)
+
 Deterministic, cross-platform editing of PLY meshes through **typed operations**.
 
 A mesh is edited by sending it ops: plain JSON such as `{"op": "carveBox", "box": {...}}` or a sculpt stroke. Every op means exactly the same thing on every platform, so:
@@ -14,14 +18,16 @@ Licensed MIT OR Apache-2.0. Dependencies are permissive only, and `cargo deny` c
 
 | Path | What |
 | --- | --- |
-| `crates/brush-mesh` | Geometry kernel: the mesh (vertex colours, named per-vertex attributes) and the 19 ops. No I/O, no GPU. |
-| `crates/brush-io` | PLY (ascii and binary, any vertex properties kept with their types), OBJ in and out, GLB out. |
-| `crates/brush-render` | The shared camera model and a software rasteriser for headless views. |
+| `crates/brush-mesh` | Geometry kernel: the mesh (vertex colours, named per-vertex attributes), the splat set, and the 29 ops. No I/O, no GPU. |
+| `crates/brush-io` | PLY (ascii and binary, any vertex properties kept with their types; splat paint round-trips byte-identically), OBJ in and out, GLB out. |
+| `crates/brush-render` | The shared camera model and a software rasteriser for headless views, including the splat compositor. |
 | `crates/brush-engine` | `Document`: validation, all-or-nothing batches, live sculpt strokes, undo, redo, revert, picking, and the journal. |
 | `crates/brush-cli` | The `brush` command: `info`, `convert`, `apply`, `replay`, `render`, `schema`. |
 | `bindings/wasm` | The engine for browsers, Node and Bun (wasm-bindgen; npm package built by wasm-pack). |
 | `bindings/swift` | The engine for iOS: a C ABI (`include/brush_engine.h`), a Swift wrapper (`Sources/BrushEngine.swift`) and `build-xcframework.sh`, which builds `BrushEngine.xcframework` into the iOS app. |
-| `apps/demo` | A small browser editor (Vite + TypeScript + three.js) that shows the engine off. |
+| `apps/demo` | A small browser editor (Vite + TypeScript + three.js) that shows the engine off, splat spray included. |
+| `apps/studio` | Brush Studio: the desktop and web editor (egui). Primitives, splat painting and baking, undo/redo, journal, measure panel, PLY open/save. |
+| `examples/` | Replayable example workflows — product design, architecture, civil engineering and game art — each with ops, a journal, a preview and a CI-checked hash. |
 | `spec/` | The op and journal schemas and the format conventions. |
 | `conformance/` | Fixtures, op lists and expected hashes that every binding must reproduce. |
 
@@ -38,6 +44,8 @@ These are the standard techniques, chosen for correctness on scanned meshes rath
   - drops slivers attached only at their corners;
   - triangulates each loop by ear clipping in its best-fit plane, with no new vertices.
 - **`sculpt`:** draw, inflate, smooth, flatten, pinch and paint brushes with a smooth falloff. Dabs apply in order, so a live stroke streamed in pieces equals the whole stroke. It's recorded as one op and one undo step.
+- **Splat painting:** surface colour as an oriented point set, not vertex colours, so paint doesn't depend on mesh resolution and survives `simplify` and `subdivide`. `splatPaint` stamps a jittered grid in the dab's tangent plane (deterministic from the seed), snaps it to the surface with the BVH, accumulates wet-on-wet opacity instead of layering geometry, and lets gravity drip paint along the surface. Splats render as screen-space Gaussians (EWA-style) on every target; `splatBake` splats them down to vertex colours when a pipeline wants a plain mesh.
+- **`transform`:** translate, rotate and scale a region about its centre; splats and their normals transform with the mesh.
 - **Scenes and building:**
   - A document also holds placed objects: linked instances that point at other models (`"scan:<id>"`).
   - The host supplies each object's mesh. Refreshing it updates every instance at once, so an edit to an object reaches every scene it is placed in.
@@ -78,6 +86,21 @@ const positions = doc.positions(); // Float32Array, plus colors(), indices(), no
 cd bindings/wasm && bun install && bun run build   # needs wasm-pack
 cd ../../apps/demo && bun install && bun run dev
 ```
+
+### Brush Studio
+
+```bash
+cd apps/studio && cargo run --release              # desktop (Linux, macOS, Windows)
+cd apps/studio && trunk build --release            # the same editor for the web
+```
+
+### Example workflows
+
+```bash
+brush replay examples/fixtures/empty.ply examples/game-art-hero-rock/journal.jsonl -o rock.ply
+```
+
+Four full sessions — [product design](examples/product-design-desk-organiser/), [architecture](examples/architecture-pavilion/), [civil engineering](examples/civil-retaining-wall/) and [game art](examples/game-art-hero-rock/) — each with readable ops and a preview, replayable on any target.
 
 ## Guarantees and how they're checked
 

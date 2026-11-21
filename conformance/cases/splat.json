@@ -1,0 +1,117 @@
+{
+  "expect": {
+    "faces": 72,
+    "hash": "434d24ea91201592",
+    "vertices": 49
+  },
+  "fixture": "paint.ply",
+  "ops": [
+    {
+      "color": [
+        200,
+        30,
+        40
+      ],
+      "colorNoise": 0.3,
+      "dabs": [
+        {
+          "center": [
+            3,
+            0,
+            3
+          ],
+          "pressure": 1
+        },
+        {
+          "center": [
+            3.4,
+            0,
+            3.2
+          ],
+          "pressure": 0.8
+        }
+      ],
+      "drip": 0.4,
+      "flow": 0.6,
+      "op": "splatPaint",
+      "radius": 1.2,
+      "seed": 11,
+      "size": 0.12,
+      "variation": 0.2,
+      "view": [
+        0,
+        -1,
+        0
+      ]
+    },
+    {
+      "color": [
+        200,
+        30,
+        40
+      ],
+      "colorNoise": 0.3,
+      "dabs": [
+        {
+          "center": [
+            3,
+            0,
+            3
+          ],
+          "pressure": 1
+        }
+      ],
+      "drip": 0.4,
+      "flow": 0.6,
+      "op": "splatPaint",
+      "radius": 1.2,
+      "seed": 11,
+      "size": 0.12,
+      "variation": 0.2,
+      "view": [
+        0,
+        -1,
+        0
+      ]
+    },
+    {
+      "box": {
+        "center": [
+          3.5,
+          0,
+          3.5
+        ],
+        "size": [
+          2,
+          2,
+          2
+        ]
+      },
+      "color": [
+        20,
+        120,
+        60
+      ],
+      "op": "splatTint",
+      "strength": 0.8
+    },
+    {
+      "dabs": [
+        {
+          "center": [
+            2.4,
+            0,
+            2.6
+          ],
+          "pressure": 1
+        }
+      ],
+      "op": "splatErase",
+      "radius": 0.5
+    },
+    {
+      "op": "splatBake",
+      "strength": 0.9
+    }
+  ]
+}

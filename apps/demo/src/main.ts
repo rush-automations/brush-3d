@@ -21,11 +21,16 @@ let brush: Brush = 'draw';
 
 function refresh(frame = false) {
   viewer.setMesh({ positions: doc.positions(), colors: doc.colors(), indices: doc.indices(), normals: doc.normals() });
+  viewer.setSplats(doc.splats(), doc.splatColors());
   const s = doc.state();
   if (frame) viewer.frame(s.bounds);
+  const m = doc.measure();
   const stats: [string, string][] = [
     ['Vertices', s.vertices.toLocaleString()],
     ['Faces', s.faces.toLocaleString()],
+    ['Splats', s.splats.toLocaleString()],
+    ['Area', `${m.surfaceArea.toFixed(2)} m²`],
+    ['Volume', m.closed ? `${m.volume.toFixed(3)} m³` : 'open mesh'],
     ['Hash', s.hash],
     ['Edits', String(s.journalLength)],
     ['Attributes', s.attributes.map((a) => a.name).join(', ') || 'none'],
@@ -135,10 +140,58 @@ function brushOp(center: Vec3, view: Vec3): Op {
   };
 }
 
+/** The splat op for one dab. `seed` counts the stroke's dabs, so a stroke sprayed in pieces equals the whole. */
+function sprayOp(center: Vec3, view: Vec3, seed: number): Op {
+  return {
+    op: 'splatPaint',
+    dabs: [{ center }],
+    radius: num('sprayRadius'),
+    size: num('spraySize'),
+    color: hexToRgb($<HTMLInputElement>('sprayColor').value),
+    opacity: num('sprayOpacity'),
+    flow: num('sprayFlow'),
+    variation: num('sprayVariation'),
+    colorNoise: num('sprayNoise'),
+    drip: num('sprayDrip'),
+    seed,
+    view,
+  };
+}
+
+function eraseOp(center: Vec3): Op {
+  return { op: 'splatErase', dabs: [{ center }], radius: num('eraseRadius') };
+}
+
+// ---- brush mode ----
+
+type Mode = 'sculpt' | 'spray' | 'erase';
+let mode: Mode = 'sculpt';
+for (const b of document.querySelectorAll<HTMLButtonElement>('#mode button')) {
+  b.addEventListener('click', () => {
+    mode = b.dataset.mode as Mode;
+    for (const other of document.querySelectorAll('#mode button')) {
+      other.setAttribute('aria-pressed', String(other === b));
+    }
+    $('sculptPanel').hidden = mode !== 'sculpt';
+    $('sprayPanel').hidden = mode !== 'spray';
+    $('erasePanel').hidden = mode !== 'erase';
+  });
+}
+
+$('bakeSplats').addEventListener('click', () => run({ op: 'splatBake', strength: 1, clear: true }));
+$('clearSplats').addEventListener('click', () => {
+  // Erase everywhere: a huge dab over the bounds centre clears all splats through the engine, so it is journaled.
+  const b = doc.state().bounds;
+  if (!b) return;
+  const c: Vec3 = [(b.min[0] + b.max[0]) / 2, (b.min[1] + b.max[1]) / 2, (b.min[2] + b.max[2]) / 2];
+  const span = Math.max(b.max[0] - b.min[0], b.max[1] - b.min[1], b.max[2] - b.min[2]);
+  run({ op: 'splatErase', dabs: [{ center: c }], radius: span * 2 || 1e6 });
+});
+
 const canvas = $<HTMLCanvasElement>('view');
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
-let stroke: { last: Vec3 } | null = null;
+let stroke: { last: Vec3; seed: number; dabs: number } | null = null;
 
 function pick(e: PointerEvent) {
   const { origin, dir } = viewer.ray(e.clientX, e.clientY);
@@ -146,14 +199,18 @@ function pick(e: PointerEvent) {
   return hit ? { hit, dir } : null;
 }
 
+const brushRadius = () => (mode === 'sculpt' ? num('radius') : mode === 'spray' ? num('sprayRadius') : num('eraseRadius'));
+
 canvas.addEventListener('pointerdown', (e) => {
   if (e.button !== 0) return;
   const p = pick(e);
   if (!p) return;
   canvas.setPointerCapture(e.pointerId);
   try {
-    doc.apply(brushOp(p.hit.point, p.dir), person);
-    stroke = { last: p.hit.point };
+    const seed = Math.floor(Math.random() * 0xffffffff);
+    const op = mode === 'sculpt' ? brushOp(p.hit.point, p.dir) : mode === 'spray' ? sprayOp(p.hit.point, p.dir, seed) : eraseOp(p.hit.point);
+    doc.apply(op, person);
+    stroke = { last: p.hit.point, seed, dabs: 1 };
     refresh();
   } catch (err) {
     status(String(err));
@@ -162,10 +219,10 @@ canvas.addEventListener('pointerdown', (e) => {
 
 canvas.addEventListener('pointermove', (e) => {
   const p = pick(e);
-  viewer.showCursor(p?.hit ?? null, num('radius'));
+  viewer.showCursor(p?.hit ?? null, brushRadius());
   if (!stroke || !p) return;
   // Space dabs a fifth of the radius apart, filling the gap since the last one.
-  const spacing = num('radius') * 0.2;
+  const spacing = brushRadius() * 0.2;
   const [a, b] = [stroke.last, p.hit.point];
   const dist = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
   if (dist < spacing) return;
@@ -174,7 +231,15 @@ canvas.addEventListener('pointermove', (e) => {
     const t = (i + 1) / steps;
     return { center: [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t] as Vec3 };
   });
-  doc.extendStroke(dabs);
+  if (mode === 'sculpt') {
+    doc.extendStroke(dabs);
+  } else {
+    for (const dab of dabs) {
+      const op = mode === 'spray' ? sprayOp(dab.center, p.dir, stroke.seed + stroke.dabs) : eraseOp(dab.center);
+      doc.apply(op, person);
+      stroke.dabs += 1;
+    }
+  }
   stroke.last = b;
   refresh();
 });

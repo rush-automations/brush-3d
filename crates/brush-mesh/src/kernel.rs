@@ -32,6 +32,8 @@ impl Mesh {
         self.retain_faces(|t| keep[t]);
         let removed = f - self.face_count();
         self.compact();
+        // Paint in the removed region goes with it.
+        self.splats.retain(|_, p| a.contains(p) == invert);
         removed
     }
 
@@ -79,6 +81,8 @@ impl Mesh {
                 self.emit_local(piece, a);
             }
         }
+        // Paint inside the carved box is cut away with the surface.
+        self.splats.retain(|_, p| !a.contains(p));
         if count == 0 {
             return 0;
         }
@@ -753,10 +757,11 @@ impl Mesh {
     /// (the same turn as a box's yaw). Colours come along; named attributes start at zero. Returns the first new face.
     pub fn add_mesh(&mut self, src: &Mesh, at: Vec3, yaw: f32, scale: f32) -> usize {
         let first = self.face_count();
-        let Some((lo, hi)) = src.bounds() else {
-            return first;
+        let anchor = match src.bounds() {
+            Some((lo, hi)) => [(lo[0] + hi[0]) * 0.5, lo[1], (lo[2] + hi[2]) * 0.5],
+            // No vertices: the anchor is the origin; splats (if any) still come along.
+            None => [0.0; 3],
         };
-        let anchor = [(lo[0] + hi[0]) * 0.5, lo[1], (lo[2] + hi[2]) * 0.5];
         let (co, si) = (cos(yaw), sin(yaw));
         let base = self.vertex_count() as u32;
         for (i, p) in src.positions.chunks_exact(3).enumerate() {
@@ -780,6 +785,28 @@ impl Mesh {
             );
         }
         self.indices.extend(src.indices.iter().map(|&i| base + i));
+        // The source's splats come along, standing where the copy stands and scaled with it.
+        for i in 0..src.splats.len() {
+            let p = src.splats.center(i);
+            let l = [
+                (p[0] - anchor[0]) * scale,
+                (p[1] - anchor[1]) * scale,
+                (p[2] - anchor[2]) * scale,
+            ];
+            let n = src.splats.normal(i);
+            self.splats.push(
+                [
+                    at[0] + co * l[0] + si * l[2],
+                    at[1] + l[1],
+                    at[2] - si * l[0] + co * l[2],
+                ],
+                [co * n[0] + si * n[2], n[1], -si * n[0] + co * n[2]],
+                src.splats.color(i),
+                src.splats.opacities[i],
+                src.splats.radii[i] * scale,
+                src.splats.drips[i],
+            );
+        }
         first
     }
 
@@ -1111,6 +1138,166 @@ impl Mesh {
             }
             added += 1;
         }
+        // Splats in the box are cloned by the same transform (mirror, turn, offset), normals included.
+        let splats: Vec<usize> = (0..self.splats.len())
+            .filter(|&i| a.weight(self.splats.center(i), 0.0) > 0.0)
+            .collect();
+        for i in splats {
+            let (p, n) = (self.splats.center(i), self.splats.normal(i));
+            let mut lp = to_local(p, a.c, a.yaw);
+            // A normal is a direction: it turns with the box frame but does not translate.
+            let tail = to_local([p[0] + n[0], p[1] + n[1], p[2] + n[2]], a.c, a.yaw);
+            let mut ln = [tail[0] - lp[0], tail[1] - lp[1], tail[2] - lp[2]];
+            if mirror_x {
+                lp[0] = -lp[0];
+                ln[0] = -ln[0];
+            }
+            if mirror_z {
+                lp[2] = -lp[2];
+                ln[2] = -ln[2];
+            }
+            let rp = [co * lp[0] + si * lp[2], lp[1], -si * lp[0] + co * lp[2]];
+            let rn = [co * ln[0] + si * ln[2], ln[1], -si * ln[0] + co * ln[2]];
+            let w = to_world(rp, a.c, a.yaw);
+            self.splats.push(
+                [w[0] + offset[0], w[1] + offset[1], w[2] + offset[2]],
+                norm(rn),
+                self.splats.color(i),
+                self.splats.opacities[i],
+                self.splats.radii[i],
+                self.splats.drips[i],
+            );
+        }
         added
+    }
+}
+
+// ---- rigid placement ----
+
+impl Mesh {
+    /// Moves, turns and scales the vertices in `area` about `pivot`, and the splats there with them. Rotation is
+    /// roll (about +z), then pitch (about +x), then yaw (about +y), all in radians. Returns the vertices moved.
+    #[allow(clippy::too_many_arguments)]
+    pub fn transform(
+        &mut self,
+        a: Area,
+        translate: Vec3,
+        roll: f32,
+        pitch: f32,
+        yaw: f32,
+        scale: f32,
+        pivot: Vec3,
+    ) -> usize {
+        let (cr, sr) = (cos(roll), sin(roll));
+        let (cp, sp) = (cos(pitch), sin(pitch));
+        let (cy, sy) = (cos(yaw), sin(yaw));
+        // R = Ry * Rx * Rz, row-major.
+        let r = [
+            cy * cr + sy * sp * sr,
+            -cy * sr + sy * sp * cr,
+            sy * cp,
+            cp * sr,
+            cp * cr,
+            -sp,
+            -sy * cr + cy * sp * sr,
+            sy * sr + cy * sp * cr,
+            cy * cp,
+        ];
+        let apply = |p: Vec3| -> Vec3 {
+            let l = [
+                (p[0] - pivot[0]) * scale,
+                (p[1] - pivot[1]) * scale,
+                (p[2] - pivot[2]) * scale,
+            ];
+            [
+                pivot[0] + r[0] * l[0] + r[1] * l[1] + r[2] * l[2] + translate[0],
+                pivot[1] + r[3] * l[0] + r[4] * l[1] + r[5] * l[2] + translate[1],
+                pivot[2] + r[6] * l[0] + r[7] * l[1] + r[8] * l[2] + translate[2],
+            ]
+        };
+        let turn = |n: Vec3| -> Vec3 {
+            norm([
+                r[0] * n[0] + r[1] * n[1] + r[2] * n[2],
+                r[3] * n[0] + r[4] * n[1] + r[5] * n[2],
+                r[6] * n[0] + r[7] * n[1] + r[8] * n[2],
+            ])
+        };
+        let mut moved = 0;
+        for i in 0..self.vertex_count() {
+            let p = self.vert(i as u32);
+            if !a.contains(p) {
+                continue;
+            }
+            let q = apply(p);
+            self.positions[i * 3] = q[0];
+            self.positions[i * 3 + 1] = q[1];
+            self.positions[i * 3 + 2] = q[2];
+            moved += 1;
+        }
+        for i in 0..self.splats.len() {
+            let p = self.splats.center(i);
+            if !a.contains(p) {
+                continue;
+            }
+            let q = apply(p);
+            self.splats.positions[i * 3] = q[0];
+            self.splats.positions[i * 3 + 1] = q[1];
+            self.splats.positions[i * 3 + 2] = q[2];
+            let n = turn(self.splats.normal(i));
+            self.splats.normals[i * 3] = n[0];
+            self.splats.normals[i * 3 + 1] = n[1];
+            self.splats.normals[i * 3 + 2] = n[2];
+            self.splats.radii[i] *= scale;
+        }
+        moved
+    }
+
+    /// Volume (signed-sum magnitude, exact for a watertight mesh), surface area, area-weighted centroid and whether
+    /// the surface is closed. Sums run in face order, so the result is the same on every platform.
+    pub fn measure(&self) -> crate::op::Measure {
+        let (mut six_v, mut twice_a) = (0f64, 0f64);
+        let mut c = [0f64; 3];
+        for t in 0..self.face_count() {
+            let [i, j, k] = self.face(t);
+            let (p, q, r) = (
+                self.vert(i).map(f64::from),
+                self.vert(j).map(f64::from),
+                self.vert(k).map(f64::from),
+            );
+            let cross = [
+                q[1] * r[2] - q[2] * r[1],
+                q[2] * r[0] - q[0] * r[2],
+                q[0] * r[1] - q[1] * r[0],
+            ];
+            six_v += p[0] * cross[0] + p[1] * cross[1] + p[2] * cross[2];
+            let ab = [q[0] - p[0], q[1] - p[1], q[2] - p[2]];
+            let ac = [r[0] - p[0], r[1] - p[1], r[2] - p[2]];
+            let n = [
+                ab[1] * ac[2] - ab[2] * ac[1],
+                ab[2] * ac[0] - ab[0] * ac[2],
+                ab[0] * ac[1] - ab[1] * ac[0],
+            ];
+            let a2 = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            twice_a += a2;
+            for k in 0..3 {
+                c[k] += a2 * (p[k] + q[k] + r[k]) / 3.0;
+            }
+        }
+        let closed = if self.indices.is_empty() {
+            true
+        } else {
+            !crate::topo::boundary_vertices(self).iter().any(|&b| b)
+        };
+        crate::op::Measure {
+            volume: if closed { six_v.abs() / 6.0 } else { 0.0 },
+            surface_area: twice_a / 2.0,
+            centroid: if twice_a > 0.0 {
+                c.map(|v| v / twice_a)
+            } else {
+                [0.0; 3]
+            },
+            closed,
+            splats: self.splats.len() as u64,
+        }
     }
 }

@@ -57,6 +57,10 @@ pub fn ceil(x: f32) -> f32 {
 pub fn round(x: f32) -> f32 {
     libm::roundf(x)
 }
+#[inline]
+pub fn exp(x: f32) -> f32 {
+    libm::expf(x)
+}
 
 #[inline]
 pub fn smoothstep(t: f32) -> f32 {

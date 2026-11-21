@@ -23,6 +23,7 @@ export interface DocState {
   bounds: { min: [number, number, number]; max: [number, number, number] } | null;
   canUndo: boolean; canRedo: boolean; dirty: boolean; lastOp: string | null; journalLength: number;
   attributes: { name: string; kind: string }[];
+  splats: number;
 }
 export interface Instance { id: string; object: string; position: [number, number, number]; yawDeg?: number; scale?: number }
 export interface Scene { instances: Instance[] }
@@ -35,6 +36,7 @@ export interface Placement {
   color?: [number, number, number];
 }
 export interface ReadReport { polygonsTriangulated: number; facesDropped: number; elementsDropped: string[]; facePropertiesDropped: string[] }
+export interface Measure { volume: number; surfaceArea: number; centroid: [number, number, number]; closed: boolean; splats: number }
 "#;
 
 fn to_js<T: Serialize>(v: &T) -> Result<JsValue, JsError> {
@@ -220,6 +222,7 @@ impl Document {
             "dirty": self.doc.is_dirty(),
             "lastOp": self.doc.last_op().map(|o| o.name()),
             "attributes": m.attributes.iter().map(|a| serde_json::json!({"name": a.name, "kind": a.kind})).collect::<Vec<_>>(),
+            "splats": m.splats.len(),
             "journalLength": self.doc.journal().entries.len(),
         }))
     }
@@ -237,6 +240,43 @@ impl Document {
     /// Triangle corners, 3 per face.
     pub fn indices(&self) -> Vec<u32> {
         self.doc.mesh().indices.clone()
+    }
+
+    /// How many paint splats the mesh carries (see the `splatPaint` op).
+    #[wasm_bindgen(js_name = splatCount)]
+    pub fn splat_count(&self) -> usize {
+        self.doc.mesh().splats.len()
+    }
+
+    /// The splats' geometry, 8 floats per splat: x, y, z, radius, nx, ny, nz, drip.
+    pub fn splats(&self) -> Vec<f32> {
+        let s = &self.doc.mesh().splats;
+        let mut out = Vec::with_capacity(s.len() * 8);
+        for i in 0..s.len() {
+            out.extend_from_slice(&s.positions[i * 3..i * 3 + 3]);
+            out.push(s.radii[i]);
+            out.extend_from_slice(&s.normals[i * 3..i * 3 + 3]);
+            out.push(s.drips[i]);
+        }
+        out
+    }
+
+    /// The splats' colours, 4 bytes per splat: r, g, b, opacity.
+    #[wasm_bindgen(js_name = splatColors)]
+    pub fn splat_colors(&self) -> Vec<u8> {
+        let s = &self.doc.mesh().splats;
+        let mut out = Vec::with_capacity(s.len() * 4);
+        for i in 0..s.len() {
+            out.extend_from_slice(&s.colors[i * 3..i * 3 + 3]);
+            out.push(s.opacities[i]);
+        }
+        out
+    }
+
+    /// Volume, surface area, centroid and watertightness (exact for a closed surface).
+    #[wasm_bindgen(unchecked_return_type = "Measure")]
+    pub fn measure(&self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.mesh().measure())
     }
 
     /// Area-weighted vertex normals, 3 per vertex.

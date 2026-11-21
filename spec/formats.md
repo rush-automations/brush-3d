@@ -51,6 +51,40 @@ property list uchar int vertex_indices
 
 Without attributes, this is byte-for-byte the format the Brush worker and server store.
 
+A mesh carrying splat paint (see **Splats** below) gets one more element after the faces:
+
+```
+element splat N
+property float x / y / z
+property uchar red / green / blue
+property uchar opacity
+property float radius
+property float nx / ny / nz
+property float drip
+```
+
+32 bytes per splat. Readers that do not know the element skip it (it is not part of any PLY dialect, but PLY's
+element/property framing makes that safe); Brush reads it back byte-identically.
+
+## Splats
+
+Splat paint is Brush's resolution-independent surface colour. Instead of writing into vertex colours — which
+blur with `simplify` and depend on how fine the mesh happens to be — a stroke is stored as an oriented point
+set in object space: each splat is a position, a unit normal, a radius, an RGB colour, an opacity and a drip
+length (how far gravity has pulled it along the surface).
+
+- **Rendering** treats each splat as a screen-space Gaussian in its tangent ellipse (EWA-style), composited
+  back to front with depth testing, over the mesh. The wasm demo and the studio renderer draw them the same
+  way, so a painted model looks identical on every target.
+- **Editing:** `splatPaint` stamps a deterministic jittered grid (from the op's `seed`) in the dab's tangent
+  plane, snaps each stamp onto the surface with a BVH raycast, and merges wet-on-wet overlap into existing
+  splats as opacity. `splatErase` removes splats in a radius, `splatTint` recolours a region, and `splatBake`
+  finally splats the set down into vertex colours (and can clear it) when a pipeline needs plain meshes.
+- **Determinism:** the same stroke on the same surface produces the same set on every platform, and streamed
+  dab-by-dab it equals the one-shot stroke (`seed` plus the dab index). Topology ops — `simplify`,
+  `subdivide`, `smooth`, `sculpt` — move the mesh but leave the set alone; region ops (`removeBox`,
+  `carveBox`, `cloneBox`, `addMesh`, `transform`) keep the set consistent with the region they touch.
+
 ## OBJ
 
 - **Reading:**
@@ -70,7 +104,10 @@ Written only: one mesh with `POSITION`, `COLOR_0` (normalised u8 RGBA), u32 indi
 - the positions (f32 bits);
 - the colours;
 - the indices (u32);
-- for each attribute, its name, a 0 byte, then its values as f64 bits.
+- for each attribute, its name, a 0 byte, then its values as f64 bits;
+- when the mesh carries splats, the splat count (as u64), then each splat's position (f32 bits), colour and
+  opacity bytes, radius, normal and drip (f32 bits) — appended only when the set is non-empty, so splat-free
+  meshes hash exactly as they always have.
 
 It's printed as 16 lowercase hex digits. Equal meshes hash equal on every platform. It's an identity check, not a cryptographic one.
 

@@ -1,0 +1,58 @@
+[
+  {
+    "op": "addBox",
+    "box": { "center": [0.0, 0.01, 0.0], "size": [0.24, 0.02, 0.16] },
+    "color": [58, 63, 71]
+  },
+  {
+    "op": "addBox",
+    "box": { "center": [-0.08, 0.06, 0.0], "size": [0.05, 0.1, 0.05] },
+    "color": [58, 63, 71]
+  },
+  {
+    "op": "addBox",
+    "box": { "center": [0.05, 0.045, 0.05], "size": [0.1, 0.05, 0.008] },
+    "color": [58, 63, 71]
+  },
+  {
+    "op": "addLathe",
+    "base": [0.06, 0.02, -0.03],
+    "profile": [[0.028, 0.0], [0.024, 0.012], [0.02, 0.012]],
+    "segments": 24,
+    "color": [88, 94, 104]
+  },
+  {
+    "op": "splatPaint",
+    "dabs": [
+      { "center": [-0.08, 0.095, 0.026], "pressure": 1.0 },
+      { "center": [-0.08, 0.075, 0.026], "pressure": 1.0 },
+      { "center": [-0.08, 0.055, 0.026], "pressure": 1.0 },
+      { "center": [-0.08, 0.035, 0.026], "pressure": 0.9 }
+    ],
+    "radius": 0.024,
+    "size": 0.005,
+    "color": [34, 111, 214],
+    "opacity": 1.0,
+    "flow": 0.8,
+    "drip": 0.25,
+    "seed": 42,
+    "view": [0.0, 0.0, 1.0],
+    "align": true
+  },
+  {
+    "op": "splatPaint",
+    "dabs": [
+      { "center": [-0.03, 0.021, 0.081], "pressure": 0.9 },
+      { "center": [0.0, 0.021, 0.081], "pressure": 0.9 },
+      { "center": [0.03, 0.021, 0.081], "pressure": 0.9 }
+    ],
+    "radius": 0.02,
+    "size": 0.004,
+    "color": [240, 240, 242],
+    "opacity": 0.9,
+    "flow": 0.6,
+    "seed": 7,
+    "view": [0.0, 0.0, 1.0],
+    "align": true
+  }
+]

@@ -209,6 +209,7 @@ pub fn read_ply(bytes: &[u8]) -> Result<(Mesh, ReadReport), IoError> {
                 read_vertices(&mut r, el, &mut mesh)?;
             }
             "face" => read_faces(&mut r, el, &mut mesh, &mut report)?,
+            "splat" => read_splats(&mut r, el, &mut mesh)?,
             _ => {
                 report.elements_dropped.push(el.name.clone());
                 skip(&mut r, el)?;
@@ -349,6 +350,86 @@ fn read_faces(
     Ok(())
 }
 
+/// The `splat` element: Brush's resolution-independent paint (see `spec/formats.md`). Properties are matched by
+/// name; anything missing takes its default, anything extra is skipped.
+fn read_splats(r: &mut Reader, el: &Element, mesh: &mut Mesh) -> Result<(), IoError> {
+    // Slots: 0..3 position, 3..6 colour, 6 opacity, 7 radius, 8..11 normal, 12 drip.
+    let slots: Vec<Option<usize>> = el
+        .props
+        .iter()
+        .map(|p| {
+            let Prop::Scalar { name, .. } = p else {
+                return None;
+            };
+            Some(match name.as_str() {
+                "x" => 0,
+                "y" => 1,
+                "z" => 2,
+                "red" | "diffuse_red" => 3,
+                "green" | "diffuse_green" => 4,
+                "blue" | "diffuse_blue" => 5,
+                "opacity" | "alpha" => 6,
+                "radius" => 7,
+                "nx" => 8,
+                "ny" => 9,
+                "nz" => 10,
+                "drip" => 11,
+                _ => return None,
+            })
+        })
+        .collect();
+    for _ in 0..el.count {
+        let mut v = [0.0f64; 3];
+        let mut c = [255.0f64; 3];
+        let (mut opacity, mut radius, mut n, mut drip) = (255.0, 0.01, [0.0, 1.0, 0.0], 0.0);
+        for (p, slot) in el.props.iter().zip(&slots) {
+            match p {
+                Prop::Scalar { ty, .. } => {
+                    let value = r.value(*ty)?;
+                    match slot {
+                        Some(k @ 0..=2) => v[*k] = value,
+                        Some(k @ 3..=5) => c[*k - 3] = value,
+                        Some(6) => opacity = value,
+                        Some(7) => radius = value,
+                        Some(k @ 8..=10) => n[*k - 8] = value,
+                        Some(11) => drip = value,
+                        _ => {}
+                    }
+                }
+                Prop::List { count, item, .. } => {
+                    let c = r.value(*count)? as usize;
+                    for _ in 0..c {
+                        r.value(*item)?;
+                    }
+                }
+            }
+        }
+        let n = [n[0] as f32, n[1] as f32, n[2] as f32];
+        // Brush writes unit normals; keep those bit-exact, and only fix up normals from foreign files.
+        let n = {
+            let l2 = brush_mesh::math::dot(n, n);
+            if (l2 - 1.0).abs() > 1e-4 {
+                brush_mesh::math::norm(n)
+            } else {
+                n
+            }
+        };
+        mesh.splats.push(
+            [v[0] as f32, v[1] as f32, v[2] as f32],
+            n,
+            [
+                c[0].clamp(0.0, 255.0) as u8,
+                c[1].clamp(0.0, 255.0) as u8,
+                c[2].clamp(0.0, 255.0) as u8,
+            ],
+            opacity.clamp(0.0, 255.0) as u8,
+            (radius as f32).max(1e-6),
+            (drip as f32).clamp(0.0, 1.0),
+        );
+    }
+    Ok(())
+}
+
 fn skip(r: &mut Reader, el: &Element) -> Result<(), IoError> {
     for _ in 0..el.count {
         for p in &el.props {
@@ -380,6 +461,8 @@ pub struct PlyOptions {
 
 /// Binary little-endian PLY: `float x y z`, `uchar red green blue`, then each attribute in its own type, and faces as
 /// `list uchar int vertex_indices`. Without attributes this is byte-for-byte the format the Brush worker writes.
+/// A mesh carrying splats gets a `splat` element after the faces (Brush's resolution-independent paint; readers that
+/// do not know it skip it).
 pub fn write_ply(mesh: &Mesh, opts: PlyOptions) -> Vec<u8> {
     let v = mesh.vertex_count();
     let f = mesh.face_count();
@@ -395,10 +478,17 @@ pub fn write_ply(mesh: &Mesh, opts: PlyOptions) -> Vec<u8> {
         header.push_str(&format!("property {} {}\n", ply_name(a.kind), a.name));
     }
     header.push_str(&format!(
-        "element face {f}\nproperty list uchar int vertex_indices\nend_header\n"
+        "element face {f}\nproperty list uchar int vertex_indices\n"
     ));
+    let s = mesh.splats.len();
+    if s > 0 {
+        header.push_str(&format!(
+            "element splat {s}\nproperty float x\nproperty float y\nproperty float z\nproperty uchar red\nproperty uchar green\nproperty uchar blue\nproperty uchar opacity\nproperty float radius\nproperty float nx\nproperty float ny\nproperty float nz\nproperty float drip\n"
+        ));
+    }
+    header.push_str("end_header\n");
     let stride = 15 + attrs.iter().map(|a| kind_size(a.kind)).sum::<usize>();
-    let mut out = Vec::with_capacity(header.len() + v * stride + f * 13);
+    let mut out = Vec::with_capacity(header.len() + v * stride + f * 13 + s * 32);
     out.extend_from_slice(header.as_bytes());
     for i in 0..v {
         for j in 0..3 {
@@ -414,6 +504,18 @@ pub fn write_ply(mesh: &Mesh, opts: PlyOptions) -> Vec<u8> {
         for j in 0..3 {
             out.extend_from_slice(&(mesh.indices[t * 3 + j] as i32).to_le_bytes());
         }
+    }
+    for i in 0..s {
+        for j in 0..3 {
+            out.extend_from_slice(&mesh.splats.positions[i * 3 + j].to_le_bytes());
+        }
+        out.extend_from_slice(&mesh.splats.colors[i * 3..i * 3 + 3]);
+        out.push(mesh.splats.opacities[i]);
+        out.extend_from_slice(&mesh.splats.radii[i].to_le_bytes());
+        for j in 0..3 {
+            out.extend_from_slice(&mesh.splats.normals[i * 3 + j].to_le_bytes());
+        }
+        out.extend_from_slice(&mesh.splats.drips[i].to_le_bytes());
     }
     out
 }

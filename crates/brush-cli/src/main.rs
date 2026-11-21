@@ -139,11 +139,19 @@ fn parse_ops(text: &str) -> Res<Vec<Op>> {
 
 fn info(mesh: &Mesh) -> Value {
     let bounds = mesh.bounds().map(|(lo, hi)| json!({"min": lo, "max": hi}));
+    let m = mesh.measure();
     json!({
         "vertices": mesh.vertex_count(),
         "faces": mesh.face_count(),
         "bounds": bounds,
         "attributes": mesh.attributes.iter().map(|a| json!({"name": a.name, "kind": a.kind})).collect::<Vec<_>>(),
+        "splats": mesh.splats.len(),
+        "measure": {
+            "volume": m.volume,
+            "surfaceArea": m.surface_area,
+            "centroid": m.centroid,
+            "closed": m.closed,
+        },
         "hash": mesh.content_hash(),
     })
 }
