@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "types": "json2ts --input ../../spec/ops.schema.json --output types/ops.d.ts --bannerComment \"/* Generated from spec/ops.schema.json by json-schema-to-typescript. Do not edit; run npm run types. */\" --additionalProperties false",
-    "build": "npm run types && wasm-pack build --target web --release && npm run types && git diff --exit-code -- types/ops.d.ts",
+    "build": "npm run types && wasm-pack build --target web --release && npm run types && sh scripts/ci-check-types.sh",
     "test": "bun test"
   },
   "devDependencies": {
