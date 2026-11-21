@@ -1,7 +1,8 @@
 #!/bin/sh
 # CI self-check for the generated types. Fails if types/ops.d.ts differs
-# from HEAD and reports the exact difference through workflow annotations,
-# which are readable via the checks API (job logs are not accessible).
+# from HEAD and reports the exact difference through workflow annotations
+# (job logs are not accessible; annotations are kept only up to ~10, so
+# this emits six dense lines, most diagnostic first).
 set -u
 
 if git diff --quiet -- types/ops.d.ts; then
@@ -9,32 +10,16 @@ if git diff --quiet -- types/ops.d.ts; then
   exit 0
 fi
 
-echo "::error file=bindings/wasm/types/ops.d.ts::types/ops.d.ts differs from HEAD after regeneration"
-
-report() {
-  # Escape workflow-command message data: % first, then CR. LF is avoided
-  # by emitting one annotation per line.
-  sed 's/%/%25/g; s/\r/%0D/g'
-}
+esc() { sed 's/%/%25/g; s/\r/%0D/g'; }
 
 {
-  echo "--- git version ---"
-  git --version
-  echo "--- relevant git config ---"
-  git config --list | grep -iE 'crlf|eol|attr|filter|ignorecase|filemode' || echo "(none)"
-  echo "--- git status --porcelain (types/) ---"
-  git status --porcelain -- types/
-  echo "--- ls -l types/ops.d.ts ---"
-  ls -l types/ops.d.ts
-  echo "--- index entry ---"
-  git ls-files -s -- types/ops.d.ts
-  echo "--- working tree blob hash ---"
-  git hash-object types/ops.d.ts
-  echo "--- head of working tree file ---"
-  od -c types/ops.d.ts | head -4
-  echo "--- git diff ---"
-  git diff -- types/ops.d.ts | head -120
-} | report | while IFS= read -r line; do
+  echo "A status=[$(git status --porcelain -- types/ | tr '\n' ';')]"
+  echo "B ls=[$(ls -l types/ops.d.ts)]"
+  echo "C index=[$(git ls-files -s -- types/ops.d.ts)]"
+  echo "D workhash=[$(git hash-object types/ops.d.ts)] headblob=[$(git rev-parse HEAD:bindings/wasm/types/ops.d.ts)]"
+  echo "E summary=[$(git diff --summary -- types/ops.d.ts | tr '\n' ';')] numstat=[$(git diff --numstat -- types/ops.d.ts | tr '\n' ';')]"
+  echo "F diffhead=$(git diff -- types/ops.d.ts | head -8 | tr '\n' '|')"
+} | esc | while IFS= read -r line; do
   echo "::error::$line"
 done
 
