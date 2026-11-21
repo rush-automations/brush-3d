@@ -6,6 +6,36 @@ The engine follows semver. The op set has its own version (`OPS_VERSION`, `x-ops
 
 Before 1.0, a change in behaviour bumps the minor version.
 
+## 0.4.0 (ops 0.4.0): unreleased
+
+### New
+
+- **Splat painting** — resolution-independent surface paint, stored as an oriented point set (position, normal,
+  radius, colour, opacity, drip) instead of vertex colours:
+  - `splatPaint`: physics-based stamping. A jittered grid of stamps in the dab's tangent plane snaps onto the
+    surface through the BVH; pressure scales coverage, a smoothstep falloff softens edges, wet-on-wet strokes
+    accumulate opacity instead of duplicating geometry, `drip` pulls paint along the gravity-projected tangent
+    and `colorNoise` adds fbm mottling. Deterministic from `seed`: the same stroke sprayed in pieces equals the
+    whole stroke, and the same stroke on a coarse or fine mesh lands identically.
+  - `splatErase`, `splatTint` (region recolour) and `splatBake` (splat down to vertex colours, optionally
+    clearing the set). `simplify` and `subdivide` leave splats untouched until you bake.
+  - PLY round-trip: meshes with splats write an `element splat` block (13 properties) that readers without
+    splat support skip; Brush reads it back byte-identically. Hashes of splat-free meshes are unchanged.
+- `transform`: translate, rotate (yaw/pitch/roll) and scale a region (or the whole mesh) about its centre;
+  splats and their normals transform with the mesh.
+- `measure`: volume (signed tetrahedra, closed meshes only), surface area, area-weighted centroid and
+  closedness, exposed on `brush info`, the wasm `Document.measure()` and the studio's measure panel.
+- `apps/studio`: Brush Studio, the desktop and web editor (egui): orbit viewport on the deterministic software
+  rasteriser, primitive creation, the splat brush with live spray and erase, baking, undo/redo, the op journal,
+  the measure panel and PLY open/save. Ships native (Linux/macOS/Windows) and as a trunk web bundle.
+- `examples/`: four replayable workflows — desk organiser (product design), pavilion (architecture), retaining
+  wall (civil) and hero rock (game art) — each with readable ops, a recorded journal, a rendered preview and a
+  manifest hash that CI replays.
+- `bindings/wasm`: `splatCount`, `splats`, `splatColors` and `measure`; `state()` reports the splat count.
+- `.github/workflows/release.yml`: tag builds for every target — CLI binaries (Linux/macOS/Windows), the wasm
+  npm package, the web demo, studio desktop bundles, the studio web bundle and the iOS XCFramework — attached
+  to the GitHub release. `.github/workflows/pages.yml` deploys the demo to GitHub Pages from main.
+
 ## 0.3.0 (ops 0.3.0): unreleased
 
 ### New
