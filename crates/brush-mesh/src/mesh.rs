@@ -2,6 +2,7 @@
 //! (normals, confidence, semantic labels, an AI model's mask...) that every edit carries along.
 
 use crate::math::Vec3;
+use crate::splat::SplatSet;
 use serde::{Deserialize, Serialize};
 
 /// The storage type an attribute had in its file, kept so it is written back the same way.
@@ -42,6 +43,9 @@ pub struct Mesh {
     /// 3 per face.
     pub indices: Vec<u32>,
     pub attributes: Vec<Attribute>,
+    /// Paint that lives in object space rather than in vertices (see [`crate::splat`]). Geometry ops leave it
+    /// alone except where noted (`removeBox`, `carveBox`, `cloneBox`, `transform`, and baking objects all carry it).
+    pub splats: SplatSet,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq)]
@@ -56,6 +60,8 @@ pub enum MeshError {
     MissingVertex(u32),
     #[error("attribute {0} must have one value per vertex")]
     Attribute(String),
+    #[error("splats must have matching positions, normals, colors, opacities, radii and drips")]
+    Splats,
 }
 
 /// Where a new vertex takes its attribute values from.
@@ -75,6 +81,7 @@ impl Mesh {
             colors,
             indices,
             attributes: Vec::new(),
+            splats: SplatSet::default(),
         };
         m.validate()?;
         Ok(m)
@@ -97,7 +104,9 @@ impl Mesh {
         if let Some(a) = self.attributes.iter().find(|a| a.values.len() != v) {
             return Err(MeshError::Attribute(a.name.clone()));
         }
-        Ok(())
+        let mut splat_error = Ok(());
+        self.splats.validate(&mut splat_error);
+        splat_error
     }
 
     #[inline]
@@ -253,8 +262,9 @@ impl Mesh {
         self.indices.truncate(w * 3);
     }
 
-    /// A content hash over positions, colours, faces and attributes: equal meshes hash equal on every platform.
-    /// FNV-1a 64 over the little-endian bytes, printed as 16 hex digits.
+    /// A content hash over positions, colours, faces, attributes and splats: equal meshes hash equal on every
+    /// platform. FNV-1a 64 over the little-endian bytes, printed as 16 hex digits. A mesh without splats hashes
+    /// exactly as it did before splats existed.
     pub fn content_hash(&self) -> String {
         let mut h = Fnv::new();
         h.write(&(self.vertex_count() as u64).to_le_bytes());
@@ -273,16 +283,19 @@ impl Mesh {
                 h.write(&v.to_bits().to_le_bytes());
             }
         }
+        if !self.splats.is_empty() {
+            self.splats.hash_into(&mut h);
+        }
         format!("{:016x}", h.0)
     }
 }
 
-struct Fnv(u64);
+pub(crate) struct Fnv(u64);
 impl Fnv {
     fn new() -> Self {
         Fnv(0xcbf2_9ce4_8422_2325)
     }
-    fn write(&mut self, bytes: &[u8]) {
+    pub(crate) fn write(&mut self, bytes: &[u8]) {
         for &b in bytes {
             self.0 ^= b as u64;
             self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
