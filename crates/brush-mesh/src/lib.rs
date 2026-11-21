@@ -26,13 +26,15 @@ pub mod op;
 pub mod region;
 pub mod sculpt;
 pub mod simplify;
+pub mod splat;
 pub mod topo;
 
 pub use bvh::{Bvh, Hit};
 pub use mesh::{Attribute, Mesh, MeshError, ScalarKind};
-pub use op::{Op, OpError, OpOutcome, OPS_VERSION};
+pub use op::{Measure, Op, OpError, OpOutcome, OPS_VERSION};
 pub use region::BoxRegion;
 pub use sculpt::{Brush, Dab};
+pub use splat::SplatSet;
 
 /// The JSON Schema of [`Op`]: the public contract for anything that produces edits, AI models included.
 pub fn ops_schema() -> serde_json::Value {
