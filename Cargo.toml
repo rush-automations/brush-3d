@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = ["crates/*", "bindings/wasm", "bindings/swift"]
+# The studio app is a delivery target, not an engine crate: it pins its own UI stack and builds on its own schedule.
+exclude = ["apps/studio"]
 
 [workspace.package]
 version = "0.1.0"
