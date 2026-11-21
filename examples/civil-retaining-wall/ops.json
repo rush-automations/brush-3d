@@ -1,0 +1,54 @@
+[
+  {
+    "op": "addBox",
+    "box": { "center": [0.0, 0.15, 0.0], "size": [3.0, 0.3, 1.2] },
+    "color": [150, 150, 152]
+  },
+  {
+    "op": "addBox",
+    "box": { "center": [0.0, 1.2, -0.3], "size": [3.0, 1.8, 0.4] },
+    "color": [158, 158, 160]
+  },
+  {
+    "op": "addRamp",
+    "box": { "center": [0.0, 0.65, -1.45], "size": [3.0, 1.3, 1.9] },
+    "color": [122, 100, 78]
+  },
+  {
+    "op": "carveBox",
+    "box": { "center": [0.9, 0.55, -0.3], "size": [0.25, 0.25, 0.5] }
+  },
+  {
+    "op": "carveBox",
+    "box": { "center": [-0.9, 0.55, -0.3], "size": [0.25, 0.25, 0.5] }
+  },
+  {
+    "op": "splatPaint",
+    "dabs": [
+      { "center": [0.9, 1.6, -0.09], "pressure": 1.0 },
+      { "center": [-0.9, 1.6, -0.09], "pressure": 1.0 }
+    ],
+    "radius": 0.28,
+    "size": 0.05,
+    "color": [204, 44, 36],
+    "opacity": 0.95,
+    "flow": 0.7,
+    "drip": 0.5,
+    "seed": 5,
+    "view": [0.0, 0.0, 1.0],
+    "align": true
+  },
+  {
+    "op": "splatPaint",
+    "dabs": [{ "center": [0.0, 2.05, -0.3], "pressure": 0.8 }],
+    "radius": 1.2,
+    "size": 0.12,
+    "color": [60, 60, 64],
+    "opacity": 0.4,
+    "flow": 0.3,
+    "drip": 0.6,
+    "seed": 21,
+    "view": [0.0, 1.0, 0.0],
+    "align": true
+  }
+]
