@@ -61,6 +61,8 @@ bool brush_document_can_redo(const BrushDocument *doc);
 bool brush_document_dirty(const BrushDocument *doc);
 size_t brush_document_vertex_count(const BrushDocument *doc);
 size_t brush_document_face_count(const BrushDocument *doc);
+size_t brush_document_splat_count(const BrushDocument *doc);
+char *brush_document_measure(const BrushDocument *doc);  /* JSON: {"volume", "surfaceArea", "centroid", "closed", "splats"} */
 char *brush_document_journal(const BrushDocument *doc);  /* JSON Lines */
 
 /* The document's own mesh, borrowed. len receives element counts. */
@@ -68,6 +70,9 @@ const float *brush_document_positions(const BrushDocument *doc, size_t *len);
 const uint8_t *brush_document_colors(const BrushDocument *doc, size_t *len);
 const uint32_t *brush_document_indices(const BrushDocument *doc, size_t *len);
 const float *brush_document_normals(BrushDocument *doc, size_t *len);
+/* Paint splats, borrowed: 8 floats per splat (x, y, z, radius, nx, ny, nz, drip) and 4 bytes (r, g, b, opacity). */
+const float *brush_document_splats(BrushDocument *doc, size_t *len);
+const uint8_t *brush_document_splat_colors(BrushDocument *doc, size_t *len);
 
 /* Picking. raycast sees the document's own mesh; pick also sees placed instances (instance gets the id, or NULL). */
 bool brush_document_raycast(BrushDocument *doc, const float origin[3], const float dir[3], BrushHit *hit);

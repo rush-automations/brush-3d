@@ -281,3 +281,85 @@ fn bad_input_is_an_error_not_a_crash() {
         brush_document_free(scratch);
     }
 }
+
+#[test]
+fn splats_and_measure() {
+    unsafe {
+        let d = open(&cube_ply(1.0, [100, 100, 100]), false);
+        assert_eq!(brush_document_splat_count(d), 0);
+        let mut n = 7;
+        assert!(brush_document_splats(d, &mut n).is_null());
+        assert_eq!(n, 0);
+        assert!(brush_document_splat_colors(d, &mut n).is_null());
+        assert_eq!(n, 0);
+
+        let m: serde_json::Value = serde_json::from_str(&take(brush_document_measure(d))).unwrap();
+        assert!((m["volume"].as_f64().unwrap() - 1.0).abs() < 1e-6, "{m}");
+        assert!(
+            (m["surfaceArea"].as_f64().unwrap() - 6.0).abs() < 1e-6,
+            "{m}"
+        );
+        assert_eq!(m["closed"], true);
+        assert_eq!(m["splats"], 0);
+        let c = m["centroid"].as_array().unwrap();
+        assert_eq!(c.len(), 3);
+        assert!((c[1].as_f64().unwrap() - 0.5).abs() < 1e-6, "{m}");
+
+        // Spray the cube's top face (y = 1) from above.
+        apply(
+            d,
+            r#"{"op":"splatPaint","dabs":[{"center":[0,1,0]}],"radius":0.4,"size":0.1,"color":[200,30,40],"view":[0,-1,0],"seed":3}"#,
+        )
+        .unwrap();
+        let count = brush_document_splat_count(d);
+        assert!(count > 0);
+        assert_eq!(state(d)["splats"], count);
+
+        let geo = brush_document_splats(d, &mut n);
+        assert_eq!(n, count * 8);
+        let geo = std::slice::from_raw_parts(geo, n);
+        let colors = brush_document_splat_colors(d, &mut n);
+        assert_eq!(n, count * 4);
+        let colors = std::slice::from_raw_parts(colors, n);
+        let mesh = (*d).doc.mesh();
+        for (i, s) in geo.chunks_exact(8).enumerate() {
+            assert!(
+                (s[1] - 1.0).abs() < 1e-3,
+                "splat {i} sits on the top face: {s:?}"
+            );
+            assert!(s[3] > 0.0, "radius");
+            assert!((s[5] - 1.0).abs() < 1e-3, "normal points up: {s:?}");
+            assert_eq!(s[3], mesh.splats.radii[i]);
+            assert_eq!(s[7], mesh.splats.drips[i]);
+        }
+        for (i, c) in colors.chunks_exact(4).enumerate() {
+            assert_eq!(&c[..3], &mesh.splats.colors[i * 3..i * 3 + 3]);
+            assert_eq!(c[3], mesh.splats.opacities[i]);
+        }
+        assert!(
+            colors.chunks_exact(4).any(|c| c[3] > 0 && c[0] > c[1]),
+            "some red paint shows"
+        );
+        let m: serde_json::Value = serde_json::from_str(&take(brush_document_measure(d))).unwrap();
+        assert_eq!(m["splats"], count);
+
+        // The cached buffers follow undo and redo.
+        assert!(brush_document_undo(d));
+        assert_eq!(brush_document_splat_count(d), 0);
+        assert!(brush_document_splats(d, &mut n).is_null());
+        assert_eq!(n, 0);
+        assert!(brush_document_splat_colors(d, &mut n).is_null());
+        assert_eq!(n, 0);
+        assert!(brush_document_redo(d));
+        brush_document_splats(d, &mut n);
+        assert_eq!(n, count * 8);
+        brush_document_splat_colors(d, &mut n);
+        assert_eq!(n, count * 4);
+
+        assert_eq!(brush_document_splat_count(ptr::null()), 0);
+        assert!(brush_document_measure(ptr::null()).is_null());
+        assert!(brush_document_splats(ptr::null_mut(), &mut n).is_null());
+        assert_eq!(n, 0);
+        brush_document_free(d);
+    }
+}

@@ -32,6 +32,8 @@ Before 1.0, a change in behaviour bumps the minor version.
   wall (civil) and hero rock (game art) — each with readable ops, a recorded journal, a rendered preview and a
   manifest hash that CI replays.
 - `bindings/wasm`: `splatCount`, `splats`, `splatColors` and `measure`; `state()` reports the splat count.
+- `bindings/swift`: `brush_document_splat_count`, `brush_document_splats` and `brush_document_splat_colors` (borrowed,
+  cached flat buffers) and `brush_document_measure`; Swift `splatCount`, `withSplats`, `measure()` and `DocState.splats`.
 - `.github/workflows/release.yml`: tag builds for every target — CLI binaries (Linux/macOS/Windows), the wasm
   npm package, the web demo, studio desktop bundles, the studio web bundle and the iOS XCFramework — attached
   to the GitHub release. `.github/workflows/pages.yml` deploys the demo to GitHub Pages from main.

@@ -73,6 +73,22 @@ public struct DocState: Decodable, Sendable {
     public let dirty: Bool
     public let lastOp: String?
     public let journalLength: Int
+    /// Paint splats on the mesh; nil from engines before 0.4.
+    public let splats: Int?
+}
+
+/// Volume, surface area, centroid and watertightness of the document's own mesh.
+public struct Measure: Decodable, Sendable {
+    /// Cubic meters, exact when `closed`.
+    public let volume: Double
+    /// Square meters.
+    public let surfaceArea: Double
+    /// Where the surface area balances, meters.
+    public let centroid: SIMD3<Double>
+    /// No boundary edges: the surface is watertight and `volume` is exact.
+    public let closed: Bool
+    /// Paint splats on the surface.
+    public let splats: Int
 }
 
 /// A placed, linked instance of another object.
@@ -215,6 +231,15 @@ public struct MeshBuffers {
     public var vertexCount: Int { positions.count / 3 }
 }
 
+/// Borrowed paint splats: valid only inside the closure they are passed to.
+public struct SplatBuffers {
+    /// 8 floats per splat: x, y, z, radius (Gaussian sigma, meters), nx, ny, nz, drip.
+    public let geometry: UnsafeBufferPointer<Float>
+    /// 4 bytes per splat: r, g, b, opacity.
+    public let colors: UnsafeBufferPointer<UInt8>
+    public var count: Int { colors.count / 4 }
+}
+
 /// A mesh being edited (or viewed), with undo, redo, a journal of every change, and a scene of linked instances.
 public final class EngineDocument: @unchecked Sendable {
     private let handle: OpaquePointer
@@ -249,6 +274,8 @@ public final class EngineDocument: @unchecked Sendable {
     public var isDirty: Bool { brush_document_dirty(handle) }
     public var vertexCount: Int { brush_document_vertex_count(handle) }
     public var faceCount: Int { brush_document_face_count(handle) }
+    /// Paint splats on the mesh (see the `splatPaint` op).
+    public var splatCount: Int { brush_document_splat_count(handle) }
     public var state: DocState? { decodeJSON(DocState.self, take(brush_document_state(handle))) }
     /// Every change, one JSON object per line.
     public var journal: String { take(brush_document_journal(handle)) ?? "" }
@@ -340,6 +367,20 @@ public final class EngineDocument: @unchecked Sendable {
             normals: UnsafeBufferPointer(start: n, count: nn)
         ))
     }
+
+    /// The document's paint splats, borrowed for the duration of `body`. Empty buffers when there are none.
+    public func withSplats<R>(_ body: (SplatBuffers) throws -> R) rethrows -> R {
+        var ng = 0, nc = 0
+        let g = brush_document_splats(handle, &ng)
+        let c = brush_document_splat_colors(handle, &nc)
+        return try body(SplatBuffers(
+            geometry: UnsafeBufferPointer(start: g, count: ng),
+            colors: UnsafeBufferPointer(start: c, count: nc)
+        ))
+    }
+
+    /// Volume, surface area, centroid and closedness of the document's own mesh.
+    public func measure() -> Measure? { decodeJSON(Measure.self, take(brush_document_measure(handle))) }
 
     /// An object's mesh, borrowed for the duration of `body`; nil when it has not been supplied.
     public func withObject<R>(_ object: String, _ body: (MeshBuffers) throws -> R) rethrows -> R? {

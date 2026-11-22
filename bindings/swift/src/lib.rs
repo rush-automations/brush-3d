@@ -23,13 +23,17 @@ use std::collections::BTreeMap;
 
 use brush_engine::{Actor, Dab, Document, Mesh, Op, Placement, Scene, DEFAULT_UNDO_DEPTH};
 
-/// An open mesh: the engine document, plus the vertex normals last computed for display.
+/// An open mesh: the engine document, plus the vertex normals and flat splat buffers last computed for display.
 pub struct BrushDocument {
     doc: Document,
     read_only: bool,
     report: io::ReadReport,
     normals: Vec<f32>,
     normals_fresh: bool,
+    /// The mesh's splats flattened for display: 8 floats and 4 bytes per splat, rebuilt after a change.
+    splats: Vec<f32>,
+    splat_colors: Vec<u8>,
+    splats_fresh: bool,
     /// Normals of each object's mesh, computed on first use.
     object_normals: BTreeMap<String, Vec<f32>>,
 }
@@ -42,12 +46,39 @@ impl BrushDocument {
             report,
             normals: Vec::new(),
             normals_fresh: false,
+            splats: Vec::new(),
+            splat_colors: Vec::new(),
+            splats_fresh: false,
             object_normals: BTreeMap::new(),
         }
     }
 
     fn changed(&mut self) {
         self.normals_fresh = false;
+        self.splats_fresh = false;
+    }
+
+    /// Rebuilds the flat splat buffers when the mesh has changed since they were last built.
+    fn refresh_splats(&mut self) {
+        if self.splats_fresh {
+            return;
+        }
+        let s = &self.doc.mesh().splats;
+        self.splats.clear();
+        self.splat_colors.clear();
+        self.splats.reserve(s.len() * 8);
+        self.splat_colors.reserve(s.len() * 4);
+        for i in 0..s.len() {
+            self.splats
+                .extend_from_slice(&s.positions[i * 3..i * 3 + 3]);
+            self.splats.push(s.radii[i]);
+            self.splats.extend_from_slice(&s.normals[i * 3..i * 3 + 3]);
+            self.splats.push(s.drips[i]);
+            self.splat_colors
+                .extend_from_slice(&s.colors[i * 3..i * 3 + 3]);
+            self.splat_colors.push(s.opacities[i]);
+        }
+        self.splats_fresh = true;
     }
 
     fn writable(&self) -> Result<(), String> {
@@ -139,7 +170,11 @@ fn json<T: serde::Serialize>(v: &T) -> Result<*mut c_char, String> {
 
 /// Roughly what one undo step costs: a whole copy of the mesh.
 fn mesh_bytes(mesh: &Mesh) -> usize {
-    let base = mesh.positions.len() * 4 + mesh.colors.len() + mesh.indices.len() * 4;
+    // Each splat holds 8 floats (position, normal, radius, drip) and 4 bytes (colour, opacity).
+    let base = mesh.positions.len() * 4
+        + mesh.colors.len()
+        + mesh.indices.len() * 4
+        + mesh.splats.len() * 36;
     // Named attributes ride along in every copy too; they are rarely large, so a margin covers them.
     base + base / 4
 }
@@ -390,7 +425,7 @@ pub unsafe extern "C" fn brush_document_mark_saved(doc: *mut BrushDocument) {
     }
 }
 
-/// The document's state as JSON: counts, bounds, hash, undo and redo, dirty, the last op and the journal length.
+/// The document's state as JSON: counts (vertices, faces, splats), bounds, hash, undo and redo, dirty, the last op and the journal length.
 #[no_mangle]
 pub unsafe extern "C" fn brush_document_state(doc: *const BrushDocument) -> *mut c_char {
     let Some(d) = doc.as_ref() else {
@@ -408,6 +443,7 @@ pub unsafe extern "C" fn brush_document_state(doc: *const BrushDocument) -> *mut
             "dirty": d.doc.is_dirty(),
             "lastOp": d.doc.last_op().map(|o| o.name()),
             "attributes": m.attributes.iter().map(|a| serde_json::json!({"name": a.name, "kind": a.kind})).collect::<Vec<_>>(),
+            "splats": m.splats.len(),
             "journalLength": d.doc.journal().entries.len(),
         })
         .to_string(),
@@ -439,6 +475,25 @@ pub unsafe extern "C" fn brush_document_vertex_count(doc: *const BrushDocument) 
 #[no_mangle]
 pub unsafe extern "C" fn brush_document_face_count(doc: *const BrushDocument) -> usize {
     doc.as_ref().map_or(0, |d| d.doc.mesh().face_count())
+}
+
+/// How many paint splats the mesh carries (see the `splatPaint` op).
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_splat_count(doc: *const BrushDocument) -> usize {
+    doc.as_ref().map_or(0, |d| d.doc.mesh().splats.len())
+}
+
+/// Volume, surface area, centroid and watertightness (exact for a closed surface), as JSON:
+/// `{"volume", "surfaceArea", "centroid", "closed", "splats"}`.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_measure(doc: *const BrushDocument) -> *mut c_char {
+    let Some(d) = doc.as_ref() else {
+        return ptr::null_mut();
+    };
+    catch_unwind(AssertUnwindSafe(|| d.doc.mesh().measure()))
+        .ok()
+        .and_then(|m| json(&m).ok())
+        .unwrap_or(ptr::null_mut())
 }
 
 // Borrowed buffers. Each stays valid until the next call that changes the document (an op, a stroke, undo, redo,
@@ -511,6 +566,33 @@ pub unsafe extern "C" fn brush_document_normals(
         }
     }
     borrow(&d.normals, len)
+}
+
+/// The splats' geometry, 8 floats per splat: x, y, z, radius, nx, ny, nz, drip. Rebuilt when the mesh has changed
+/// since the last call to this or `brush_document_splat_colors`.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_splats(
+    doc: *mut BrushDocument,
+    len: *mut usize,
+) -> *const f32 {
+    let Some(d) = doc.as_mut() else {
+        return borrow::<f32>(&[], len);
+    };
+    d.refresh_splats();
+    borrow(&d.splats, len)
+}
+
+/// The splats' colours, 4 bytes per splat: r, g, b, opacity. Borrowed like `brush_document_splats`.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_splat_colors(
+    doc: *mut BrushDocument,
+    len: *mut usize,
+) -> *const u8 {
+    let Some(d) = doc.as_mut() else {
+        return borrow::<u8>(&[], len);
+    };
+    d.refresh_splats();
+    borrow(&d.splat_colors, len)
 }
 
 /// The first point where `origin + t * dir` meets the surface. Faces are two-sided. Returns false on a miss.
