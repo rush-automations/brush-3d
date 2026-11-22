@@ -1,8 +1,8 @@
 {
   "expect": {
-    "faces": 1315,
-    "hash": "cb93e27ef6d5b6c9",
-    "vertices": 670
+    "faces": 1579,
+    "hash": "dcce90bd8c26ec00",
+    "vertices": 803
   },
   "fixture": "kitchen-sink.ply",
   "ops": [

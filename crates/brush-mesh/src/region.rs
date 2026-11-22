@@ -47,6 +47,40 @@ impl Area {
         l[0].abs() <= self.h[0] && l[1].abs() <= self.h[1] && l[2].abs() <= self.h[2]
     }
 
+    /// True when any point of the segment `a..b` lies inside the oriented box (symmetric in `a` and `b`).
+    pub fn intersects_segment(&self, a: Vec3, b: Vec3) -> bool {
+        if self.is_all() {
+            return true;
+        }
+        let la = to_local(a, self.c, self.yaw);
+        let lb = to_local(b, self.c, self.yaw);
+        let mut t0 = 0.0f32;
+        let mut t1 = 1.0f32;
+        for axis in 0..3 {
+            let p0 = la[axis];
+            let d = lb[axis] - p0;
+            let h = self.h[axis];
+            if d.abs() < 1e-8 {
+                if p0.abs() > h {
+                    return false;
+                }
+            } else {
+                let inv = 1.0 / d;
+                let mut near = (-h - p0) * inv;
+                let mut far = (h - p0) * inv;
+                if near > far {
+                    std::mem::swap(&mut near, &mut far);
+                }
+                t0 = t0.max(near);
+                t1 = t1.min(far);
+                if t0 > t1 {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
     /// 1 inside, 0 outside, easing over `edge` meters at the boundary when edge > 0. The whole mesh weighs 1.
     pub fn weight(&self, p: Vec3, edge: f32) -> f32 {
         if self.is_all() {

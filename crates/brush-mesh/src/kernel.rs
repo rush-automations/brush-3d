@@ -329,12 +329,7 @@ impl Mesh {
             if dot(d, d) <= max_sq {
                 return false;
             }
-            let mid = [
-                (pa[0] + pb[0]) / 2.0,
-                (pa[1] + pb[1]) / 2.0,
-                (pa[2] + pb[2]) / 2.0,
-            ];
-            a.weight(mid, 0.0) > 0.0
+            a.intersects_segment(pa, pb)
         };
         let mut pass = 0;
         while pass < passes && self.face_count() < max_faces as usize {

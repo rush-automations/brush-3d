@@ -4,11 +4,20 @@
 //! applied in several pieces gives exactly the same mesh as the whole stroke at once, which lets an app stream a
 //! stroke live and record it as one op.
 
-use crate::math::{dot, norm, smoothstep, sqrt, sub, Vec3};
+use crate::math::{cross, dot, norm, round, smoothstep, sqrt, sub, Vec3};
 use crate::mesh::Mesh;
 use crate::topo::{vertex_faces, vertex_neighbors, vertex_normal, Csr};
+use rustc_hash::FxHashMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+fn weld_key(p: Vec3) -> [i32; 3] {
+    [
+        round(p[0] * 2000.0) as i32,
+        round(p[1] * 2000.0) as i32,
+        round(p[2] * 2000.0) as i32,
+    ]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -152,8 +161,43 @@ impl Mesh {
                 continue;
             }
             // The area under the brush: weighted centre and normal.
+            // For Draw and Inflate, weld normals across coincident positions so hard edges/seams
+            // move together instead of tearing open into sharp jagged lips.
+            let mut weld_counts: FxHashMap<[i32; 3], u32> = FxHashMap::default();
             let normals: Vec<Vec3> = if matches!(brush, Brush::Smooth) {
                 Vec::new()
+            } else if matches!(brush, Brush::Draw | Brush::Inflate) {
+                let mut welded: FxHashMap<[i32; 3], Vec3> = FxHashMap::default();
+                for &(i, _) in &hit {
+                    let key = weld_key(self.vert(i));
+                    *weld_counts.entry(key).or_insert(0) += 1;
+                    let entry = welded.entry(key).or_insert([0.0; 3]);
+                    for &f in topo.vf.row(i as usize) {
+                        let [a, b, c] = self.face(f as usize);
+                        let n = cross(sub(self.vert(b), self.vert(a)), sub(self.vert(c), self.vert(a)));
+                        entry[0] += n[0];
+                        entry[1] += n[1];
+                        entry[2] += n[2];
+                    }
+                }
+                hit.iter()
+                    .map(|&(i, _)| {
+                        let raw = welded
+                            .get(&weld_key(self.vert(i)))
+                            .copied()
+                            .unwrap_or([0.0, 1.0, 0.0]);
+                        let n = norm(raw);
+                        let n = if dot(n, n) > 0.0 {
+                            n
+                        } else {
+                            vertex_normal(self, &topo.vf, i as usize)
+                        };
+                        match view {
+                            Some(v) if dot(n, v) > 0.0 => n.map(|x| -x),
+                            _ => n,
+                        }
+                    })
+                    .collect()
             } else {
                 hit.iter()
                     .map(|&(i, _)| {
@@ -176,7 +220,10 @@ impl Mesh {
             }
             let an = norm(an);
             let ac = ac.map(|v| v / wsum);
-            let step = radius * 0.25;
+            let step = match brush {
+                Brush::Inflate => radius * 0.16,
+                _ => radius * 0.25,
+            };
             moves.clear();
             for (k, &(i, w)) in hit.iter().enumerate() {
                 let p = self.vert(i);
@@ -219,6 +266,41 @@ impl Mesh {
                 let o = i as usize * 3;
                 for j in 0..3 {
                     self.positions[o + j] += moves[k][j];
+                }
+            }
+            // Gentle tangential relaxation after Draw/Inflate prevents vertices from bunching into
+            // sharp jagged spikes while preserving the raised/inflated volume (skipping unwelded seams).
+            if matches!(brush, Brush::Draw | Brush::Inflate) {
+                moves.clear();
+                for (k, &(i, w)) in hit.iter().enumerate() {
+                    let row = topo.nb.row(i as usize);
+                    let p = self.vert(i);
+                    let is_seam = weld_counts.get(&weld_key(p)).copied().unwrap_or(1) > 1;
+                    if row.is_empty() || is_seam {
+                        moves.push([0.0; 3]);
+                        continue;
+                    }
+                    let mut s = [0f32; 3];
+                    for &j in row {
+                        let q = self.vert(j);
+                        s = [s[0] + q[0], s[1] + q[1], s[2] + q[2]];
+                    }
+                    let n = row.len() as f32;
+                    let delta = [s[0] / n - p[0], s[1] / n - p[1], s[2] / n - p[2]];
+                    let vn = normals[k];
+                    let along = dot(delta, vn);
+                    let relax = 0.22 * w.min(1.0);
+                    moves.push([
+                        (delta[0] - vn[0] * along) * relax,
+                        (delta[1] - vn[1] * along) * relax,
+                        (delta[2] - vn[2] * along) * relax,
+                    ]);
+                }
+                for (k, &(i, _)) in hit.iter().enumerate() {
+                    let o = i as usize * 3;
+                    for j in 0..3 {
+                        self.positions[o + j] += moves[k][j];
+                    }
                 }
             }
         }

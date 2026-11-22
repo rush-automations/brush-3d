@@ -1,8 +1,8 @@
 {
   "expect": {
-    "faces": 640,
-    "hash": "7f9669346b9f6bd2",
-    "vertices": 337
+    "faces": 880,
+    "hash": "1336a94430240fbc",
+    "vertices": 457
   },
   "fixture": "subdivide.ply",
   "ops": [
