@@ -748,6 +748,59 @@ impl Mesh {
         first
     }
 
+    /// A copy of `src` like [`Mesh::add_mesh`], turned by any rotation: `rot` is a row-major 3x3 rotation matrix
+    /// (world = at + rot * (scale * (p - anchor))). Splat normals turn with it. Returns the first new face.
+    pub fn add_mesh_rotated(
+        &mut self,
+        src: &Mesh,
+        at: Vec3,
+        rot: [[f32; 3]; 3],
+        scale: f32,
+    ) -> usize {
+        let first = self.face_count();
+        let anchor = match src.bounds() {
+            Some((lo, hi)) => [(lo[0] + hi[0]) * 0.5, lo[1], (lo[2] + hi[2]) * 0.5],
+            None => [0.0; 3],
+        };
+        let turn = |v: [f32; 3]| {
+            [
+                rot[0][0] * v[0] + rot[0][1] * v[1] + rot[0][2] * v[2],
+                rot[1][0] * v[0] + rot[1][1] * v[1] + rot[1][2] * v[2],
+                rot[2][0] * v[0] + rot[2][1] * v[1] + rot[2][2] * v[2],
+            ]
+        };
+        let local = |p: [f32; 3]| {
+            [
+                (p[0] - anchor[0]) * scale,
+                (p[1] - anchor[1]) * scale,
+                (p[2] - anchor[2]) * scale,
+            ]
+        };
+        let base = self.vertex_count() as u32;
+        for (i, p) in src.positions.chunks_exact(3).enumerate() {
+            let w = turn(local([p[0], p[1], p[2]]));
+            let c = [
+                src.colors[i * 3],
+                src.colors[i * 3 + 1],
+                src.colors[i * 3 + 2],
+            ];
+            self.add_vert([at[0] + w[0], at[1] + w[1], at[2] + w[2]], c);
+        }
+        self.indices.extend(src.indices.iter().map(|&i| base + i));
+        for i in 0..src.splats.len() {
+            let w = turn(local(src.splats.center(i)));
+            self.splats.push(
+                [at[0] + w[0], at[1] + w[1], at[2] + w[2]],
+                turn(src.splats.normal(i)),
+                src.splats.color(i),
+                src.splats.opacities[i],
+                src.splats.radii[i] * scale,
+                src.splats.drips[i],
+            );
+        }
+        first
+    }
+
     /// A copy of `src`: its bounding-box bottom centre moved to `at`, scaled by `scale` and turned by `yaw` about +y
     /// (the same turn as a box's yaw). Colours come along; named attributes start at zero. Returns the first new face.
     pub fn add_mesh(&mut self, src: &Mesh, at: Vec3, yaw: f32, scale: f32) -> usize {

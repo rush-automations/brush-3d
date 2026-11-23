@@ -20,6 +20,8 @@ fn place(id: &str, x: f64) -> Op {
         object: "scan:chair".into(),
         position: [x, 0.0, 0.0],
         yaw_deg: 0.0,
+        pitch_deg: 0.0,
+        roll_deg: 0.0,
         scale: 1.0,
     }
 }
@@ -47,6 +49,8 @@ fn instances_are_journaled_undoable_and_leave_the_mesh_alone() {
             id: "a".into(),
             position: [2.0, 0.0, 0.0],
             yaw_deg: 90.0,
+            pitch_deg: 0.0,
+            roll_deg: 0.0,
             scale: 2.0,
         },
         Actor::default(),
@@ -190,6 +194,8 @@ fn journals_with_scenes_replay() {
             id: "a".into(),
             position: [0.0, 1.0, 0.0],
             yaw_deg: 45.0,
+            pitch_deg: 30.0,
+            roll_deg: -15.0,
             scale: 1.0,
         },
         Actor::default(),

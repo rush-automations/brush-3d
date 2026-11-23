@@ -196,10 +196,18 @@ export type BrushEngineOperation =
       object: string;
       op: "placeObject";
       /**
+       * Tilt about +x, degrees (applied before the yaw).
+       */
+      pitchDeg?: number;
+      /**
        * @minItems 3
        * @maxItems 3
        */
       position: [number, number, number];
+      /**
+       * Tilt about +z, degrees (applied first).
+       */
+      rollDeg?: number;
       scale?: number;
       yawDeg?: number;
     }
@@ -207,10 +215,18 @@ export type BrushEngineOperation =
       id: string;
       op: "moveObject";
       /**
+       * Tilt about +x, degrees (applied before the yaw).
+       */
+      pitchDeg?: number;
+      /**
        * @minItems 3
        * @maxItems 3
        */
       position: [number, number, number];
+      /**
+       * Tilt about +z, degrees (applied first).
+       */
+      rollDeg?: number;
       scale?: number;
       yawDeg?: number;
     }

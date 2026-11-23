@@ -25,7 +25,7 @@ export interface DocState {
   attributes: { name: string; kind: string }[];
   splats: number;
 }
-export interface Instance { id: string; object: string; position: [number, number, number]; yawDeg?: number; scale?: number }
+export interface Instance { id: string; object: string; position: [number, number, number]; yawDeg?: number; pitchDeg?: number; rollDeg?: number; scale?: number }
 export interface Scene { instances: Instance[] }
 export interface Pick extends Hit { instance?: string }
 export type Piece = "wall" | "floor" | "ramp" | "cube" | "cylinder" | "cone" | "sphere" | "object";
@@ -387,7 +387,8 @@ impl Document {
         self.doc.instance_transform(id).map(|m| m.to_vec())
     }
 
-    /// Where an object would be drawn for a placement (a ghost), or undefined when its mesh is unknown.
+    /// Where an object would be drawn for a placement (a ghost), or undefined when its mesh is unknown. The optional
+    /// `pitchDeg` and `rollDeg` tilt it as an instance's do.
     #[wasm_bindgen(js_name = objectTransform)]
     pub fn object_transform(
         &self,
@@ -395,10 +396,19 @@ impl Document {
         position: &[f64],
         yaw_deg: f64,
         scale: f64,
+        pitch_deg: Option<f64>,
+        roll_deg: Option<f64>,
     ) -> Option<Vec<f32>> {
         let p: [f64; 3] = position.try_into().ok()?;
         self.doc
-            .object_transform(object, p, yaw_deg, scale)
+            .object_transform(
+                object,
+                p,
+                yaw_deg,
+                scale,
+                pitch_deg.unwrap_or(0.0),
+                roll_deg.unwrap_or(0.0),
+            )
             .map(|m| m.to_vec())
     }
 

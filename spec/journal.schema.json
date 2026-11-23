@@ -766,7 +766,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Place a linked instance of another object (`\"scan:<id>\"`) in the document's scene: the object's bounding-box\nbottom centre goes to `position`, scaled by `scale` and turned `yawDeg` degrees about +y. The instance points\nat the object rather than copying it, so when the object changes every instance of it changes too. Acts on a\ndocument's scene, not on a bare mesh. Count: 1.",
+          "description": "Place a linked instance of another object (`\"scan:<id>\"`) in the document's scene: the object's bounding-box\nbottom centre goes to `position`, scaled by `scale` and turned about that point: `rollDeg` about +z, then\n`pitchDeg` about +x, then `yawDeg` about +y. The instance points at the object rather than copying it, so when\nthe object changes every instance of it changes too. Acts on a document's scene, not on a bare mesh. Count: 1.",
           "properties": {
             "id": {
               "description": "Names the instance within this document; later ops refer to it.",
@@ -779,6 +779,11 @@
               "const": "placeObject",
               "type": "string"
             },
+            "pitchDeg": {
+              "description": "Tilt about +x, degrees (applied before the yaw).",
+              "format": "double",
+              "type": "number"
+            },
             "position": {
               "items": {
                 "format": "double",
@@ -787,6 +792,11 @@
               "maxItems": 3,
               "minItems": 3,
               "type": "array"
+            },
+            "rollDeg": {
+              "description": "Tilt about +z, degrees (applied first).",
+              "format": "double",
+              "type": "number"
             },
             "scale": {
               "default": 1.0,
@@ -817,6 +827,11 @@
               "const": "moveObject",
               "type": "string"
             },
+            "pitchDeg": {
+              "description": "Tilt about +x, degrees (applied before the yaw).",
+              "format": "double",
+              "type": "number"
+            },
             "position": {
               "items": {
                 "format": "double",
@@ -825,6 +840,11 @@
               "maxItems": 3,
               "minItems": 3,
               "type": "array"
+            },
+            "rollDeg": {
+              "description": "Tilt about +z, degrees (applied first).",
+              "format": "double",
+              "type": "number"
             },
             "scale": {
               "default": 1.0,

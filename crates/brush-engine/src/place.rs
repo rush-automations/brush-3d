@@ -253,6 +253,8 @@ pub fn place(
             object: p.object.clone().unwrap_or_default(),
             position: b,
             yaw_deg,
+            pitch_deg: 0.0,
+            roll_deg: 0.0,
             scale: p.scale,
         },
     })
@@ -361,6 +363,8 @@ mod tests {
                 object: "scan:chair".into(),
                 position: [0.37, 0.02, 1.62],
                 yaw_deg: 0.0,
+                pitch_deg: 0.0,
+                roll_deg: 0.0,
                 scale: 2.0
             }
         );

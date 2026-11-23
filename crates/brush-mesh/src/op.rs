@@ -208,9 +208,9 @@ pub enum Op {
         color: Rgb,
     },
     /// Place a linked instance of another object (`"scan:<id>"`) in the document's scene: the object's bounding-box
-    /// bottom centre goes to `position`, scaled by `scale` and turned `yawDeg` degrees about +y. The instance points
-    /// at the object rather than copying it, so when the object changes every instance of it changes too. Acts on a
-    /// document's scene, not on a bare mesh. Count: 1.
+    /// bottom centre goes to `position`, scaled by `scale` and turned about that point: `rollDeg` about +z, then
+    /// `pitchDeg` about +x, then `yawDeg` about +y. The instance points at the object rather than copying it, so when
+    /// the object changes every instance of it changes too. Acts on a document's scene, not on a bare mesh. Count: 1.
     PlaceObject {
         /// Names the instance within this document; later ops refer to it.
         id: String,
@@ -218,6 +218,12 @@ pub enum Op {
         position: [f64; 3],
         #[serde(default, skip_serializing_if = "is_zero")]
         yaw_deg: f64,
+        /// Tilt about +x, degrees (applied before the yaw).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        pitch_deg: f64,
+        /// Tilt about +z, degrees (applied first).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        roll_deg: f64,
         #[serde(default = "one_f")]
         scale: f64,
     },
@@ -227,6 +233,12 @@ pub enum Op {
         position: [f64; 3],
         #[serde(default, skip_serializing_if = "is_zero")]
         yaw_deg: f64,
+        /// Tilt about +x, degrees (applied before the yaw).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        pitch_deg: f64,
+        /// Tilt about +z, degrees (applied first).
+        #[serde(default, skip_serializing_if = "is_zero")]
+        roll_deg: f64,
         #[serde(default = "one_f")]
         scale: f64,
     },
@@ -515,11 +527,13 @@ fn check_id(id: &str) -> Result<(), OpError> {
     Ok(())
 }
 
-fn check_transform(position: &[f64; 3], yaw_deg: f64, scale: f64) -> Result<(), OpError> {
+fn check_transform(position: &[f64; 3], angles: [f64; 3], scale: f64) -> Result<(), OpError> {
     position
         .iter()
         .try_for_each(|&v| finite("position", v).map(|_| ()))?;
-    finite("yawDeg", yaw_deg)?;
+    finite("yawDeg", angles[0])?;
+    finite("pitchDeg", angles[1])?;
+    finite("rollDeg", angles[2])?;
     if finite("scale", scale)? <= 0.0 {
         return Err(OpError::Invalid("scale must be positive".into()));
     }
@@ -688,6 +702,8 @@ impl Op {
                 object,
                 position,
                 yaw_deg,
+                pitch_deg,
+                roll_deg,
                 scale,
             } => {
                 check_id(id)?;
@@ -696,16 +712,18 @@ impl Op {
                         "object must name an object, such as \"scan:<id>\"".into(),
                     ));
                 }
-                check_transform(position, *yaw_deg, *scale)
+                check_transform(position, [*yaw_deg, *pitch_deg, *roll_deg], *scale)
             }
             Op::MoveObject {
                 id,
                 position,
                 yaw_deg,
+                pitch_deg,
+                roll_deg,
                 scale,
             } => {
                 check_id(id)?;
-                check_transform(position, *yaw_deg, *scale)
+                check_transform(position, [*yaw_deg, *pitch_deg, *roll_deg], *scale)
             }
             Op::RemoveObject { id } | Op::BakeObject { id } => check_id(id),
             Op::AddFrustum {

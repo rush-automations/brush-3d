@@ -321,24 +321,27 @@ impl Document {
         Some(scene::transform(
             scene::anchor(obj),
             inst.position,
-            inst.yaw_deg,
+            inst.rotation(),
             inst.scale,
         ))
     }
 
-    /// Where an object would be drawn for a given placement (a ghost before placing it).
+    /// Where an object would be drawn for a given placement (a ghost before placing it). `pitch_deg` and `roll_deg`
+    /// tilt it as an instance's do (see [`scene::rotation`]).
     pub fn object_transform(
         &self,
         object: &str,
         position: [f64; 3],
         yaw_deg: f64,
         scale: f64,
+        pitch_deg: f64,
+        roll_deg: f64,
     ) -> Option<[f32; 16]> {
         let obj = self.objects.get(object)?;
         Some(scene::transform(
             scene::anchor(obj),
             position,
-            yaw_deg,
+            scene::rotation(yaw_deg, pitch_deg, roll_deg),
             scale,
         ))
     }
@@ -393,6 +396,8 @@ impl Document {
                 object,
                 position,
                 yaw_deg,
+                pitch_deg,
+                roll_deg,
                 scale,
             } => {
                 if self.scene.get(id).is_some() {
@@ -403,6 +408,8 @@ impl Document {
                     object: object.clone(),
                     position: *position,
                     yaw_deg: *yaw_deg,
+                    pitch_deg: *pitch_deg,
+                    roll_deg: *roll_deg,
                     scale: *scale,
                 });
                 Ok((outcome(1, &self.mesh), false))
@@ -411,11 +418,14 @@ impl Document {
                 id,
                 position,
                 yaw_deg,
+                pitch_deg,
+                roll_deg,
                 scale,
             } => {
                 let i = find(&self.scene, id)?;
                 let inst = &mut self.scene.instances[i];
                 (inst.position, inst.yaw_deg, inst.scale) = (*position, *yaw_deg, *scale);
+                (inst.pitch_deg, inst.roll_deg) = (*pitch_deg, *roll_deg);
                 Ok((outcome(1, &self.mesh), false))
             }
             Op::RemoveObject { id } => {

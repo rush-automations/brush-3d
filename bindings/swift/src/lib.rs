@@ -668,7 +668,7 @@ pub unsafe extern "C" fn brush_document_journal(doc: *const BrushDocument) -> *m
 
 // ---- scene: linked instances of other objects ----
 
-/// The placed objects as JSON: `{"instances": [{"id", "object", "position", "yawDeg", "scale"}]}`.
+/// The placed objects as JSON: `{"instances": [{"id", "object", "position", "yawDeg", "pitchDeg"?, "rollDeg"?, "scale"}]}`.
 #[no_mangle]
 pub unsafe extern "C" fn brush_document_scene(doc: *const BrushDocument) -> *mut c_char {
     match doc.as_ref() {
@@ -813,7 +813,7 @@ pub unsafe extern "C" fn brush_document_instance_transform(
     }
 }
 
-/// Where an object would be drawn for a placement (a ghost), as `brush_document_instance_transform` gives it.
+/// Where an object would be drawn for an upright placement (a ghost), as `brush_document_instance_transform` gives it.
 #[no_mangle]
 pub unsafe extern "C" fn brush_document_object_transform(
     doc: *const BrushDocument,
@@ -830,7 +830,7 @@ pub unsafe extern "C" fn brush_document_object_transform(
         return false;
     }
     let p = *(position as *const [f64; 3]);
-    match d.doc.object_transform(object, p, yaw_deg, scale) {
+    match d.doc.object_transform(object, p, yaw_deg, scale, 0.0, 0.0) {
         Some(m) => {
             std::ptr::copy_nonoverlapping(m.as_ptr(), out, 16);
             true
