@@ -174,7 +174,10 @@ impl Mesh {
                     let entry = welded.entry(key).or_insert([0.0; 3]);
                     for &f in topo.vf.row(i as usize) {
                         let [a, b, c] = self.face(f as usize);
-                        let n = cross(sub(self.vert(b), self.vert(a)), sub(self.vert(c), self.vert(a)));
+                        let n = cross(
+                            sub(self.vert(b), self.vert(a)),
+                            sub(self.vert(c), self.vert(a)),
+                        );
                         entry[0] += n[0];
                         entry[1] += n[1];
                         entry[2] += n[2];
