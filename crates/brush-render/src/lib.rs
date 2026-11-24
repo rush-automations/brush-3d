@@ -45,7 +45,13 @@ pub fn render(mesh: &Mesh, width: u32, height: u32, cam: &Camera) -> Vec<u8> {
     let eye = cam.eye.map(|v| v as f32);
     let target = cam.target.map(|v| v as f32);
     let fwd = norm(sub(target, eye));
-    let right = norm(cross(fwd, [0.0, 1.0, 0.0]));
+    // A top or bottom view is parallel to world Y; use Z as the reference up axis there.
+    let reference_up = if fwd[1].abs() > 0.9999 {
+        [0.0, 0.0, 1.0]
+    } else {
+        [0.0, 1.0, 0.0]
+    };
+    let right = norm(cross(fwd, reference_up));
     let up = cross(right, fwd);
     let f = 1.0 / tan(cam.fov_deg as f32 * std::f32::consts::PI / 360.0);
     let aspect = width as f32 / height as f32;
@@ -366,6 +372,33 @@ mod tests {
         let mid = (32 * 64 + 32) * 4;
         assert!(px[mid] > px[mid + 1]);
         assert_eq!(px[3], 255);
+    }
+
+    #[test]
+    fn renders_exactly_vertical_top_and_bottom_views() {
+        let mut mesh = Mesh::default();
+        let op: Op = serde_json::from_str(
+            r#"{"op":"addBox","box":{"center":[0,0,0],"size":[2,2,2]},"color":[255,0,0]}"#,
+        )
+        .unwrap();
+        op.apply(&mut mesh, Context::default()).unwrap();
+        for y in [6.0, -6.0] {
+            let pixels = render(
+                &mesh,
+                64,
+                64,
+                &Camera {
+                    eye: [0.0, y, 0.0],
+                    target: [0.0, 0.0, 0.0],
+                    fov_deg: 60.0,
+                },
+            );
+            let centre = (32 * 64 + 32) * 4;
+            assert!(
+                pixels[centre] > pixels[centre + 1],
+                "vertical camera must see the red box"
+            );
+        }
     }
 
     #[test]

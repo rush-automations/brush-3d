@@ -3,9 +3,10 @@
 
 use brush_engine::io::{self, Format};
 use brush_engine::render::{render, Camera};
-use brush_engine::{Actor, ActorKind, Document, Journal, Mesh, Op};
+use brush_engine::{Actor, ActorKind, Document, Journal, Mesh, Op, Scene};
 use clap::{Parser, Subcommand};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -23,7 +24,13 @@ struct Cli {
 #[derive(Subcommand)]
 enum Cmd {
     /// Print counts, bounds, attributes and the content hash of a mesh.
-    Info { file: PathBuf },
+    Info {
+        file: PathBuf,
+        #[arg(long)]
+        scene: Option<PathBuf>,
+        #[arg(long)]
+        objects: Option<PathBuf>,
+    },
     /// Convert between PLY, OBJ and GLB (by extension).
     Convert { input: PathBuf, output: PathBuf },
     /// Apply ops to a mesh. Ops are a JSON array, one JSON op, or JSON Lines; `-` reads stdin.
@@ -42,6 +49,24 @@ enum Cmd {
         /// The actor is an AI model.
         #[arg(long)]
         model: bool,
+        /// Scene JSON; instances stay separate from the surface mesh.
+        #[arg(long)]
+        scene: Option<PathBuf>,
+        /// JSON map from object keys to PLY/OBJ files.
+        #[arg(long)]
+        objects: Option<PathBuf>,
+    },
+    /// Find the nearest surface or instance along a ray.
+    Pick {
+        input: PathBuf,
+        #[arg(long, value_parser = vec3)]
+        origin: [f64; 3],
+        #[arg(long, value_parser = vec3)]
+        direction: [f64; 3],
+        #[arg(long)]
+        scene: Option<PathBuf>,
+        #[arg(long)]
+        objects: Option<PathBuf>,
     },
     /// Replay a journal onto a mesh, checking every step's hash.
     Replay {
@@ -67,6 +92,10 @@ enum Cmd {
         width: u32,
         #[arg(long, default_value_t = 600)]
         height: u32,
+        #[arg(long)]
+        scene: Option<PathBuf>,
+        #[arg(long)]
+        objects: Option<PathBuf>,
     },
     /// Print a JSON Schema: `ops` (the operation contract) or `journal`.
     Schema {
@@ -156,9 +185,37 @@ fn info(mesh: &Mesh) -> Value {
     })
 }
 
+fn open_document(input: &Path, scene: Option<&Path>, objects: Option<&Path>) -> Res<Document> {
+    let mut doc = Document::new(load(input)?);
+    if let Some(path) = scene {
+        let scene: Scene =
+            serde_json::from_str(&read_text(path)?).map_err(|e| format!("scene: {e}"))?;
+        doc.load_scene(scene);
+    }
+    if let Some(path) = objects {
+        let files: BTreeMap<String, PathBuf> =
+            serde_json::from_str(&read_text(path)?).map_err(|e| format!("objects: {e}"))?;
+        for (key, object_path) in files {
+            doc.set_object(key, load(&object_path)?);
+        }
+    }
+    Ok(doc)
+}
+
 fn run(cli: Cli) -> Res<Value> {
     match cli.cmd {
-        Cmd::Info { file } => Ok(info(&load(&file)?)),
+        Cmd::Info {
+            file,
+            scene,
+            objects,
+        } => {
+            let doc = open_document(&file, scene.as_deref(), objects.as_deref())?;
+            let mut result = info(doc.mesh());
+            result["scene"] = json!(doc.scene());
+            result["missingObjects"] = json!(doc.missing_objects());
+            result["documentHash"] = json!(doc.hash());
+            Ok(result)
+        }
         Cmd::Convert { input, output } => {
             let m = load(&input)?;
             save(&m, &output)?;
@@ -171,8 +228,10 @@ fn run(cli: Cli) -> Res<Value> {
             journal,
             actor,
             model,
+            scene,
+            objects,
         } => {
-            let mut doc = Document::new(load(&input)?);
+            let mut doc = open_document(&input, scene.as_deref(), objects.as_deref())?;
             let ops = parse_ops(&read_text(&ops)?)?;
             let actor = Actor {
                 id: actor,
@@ -186,7 +245,28 @@ fn run(cli: Cli) -> Res<Value> {
                 std::fs::write(&j, doc.journal().to_jsonl())
                     .map_err(|e| format!("{}: {e}", j.display()))?;
             }
-            Ok(json!({"applied": applied, "mesh": info(doc.mesh())}))
+            Ok(
+                json!({"applied": applied, "mesh": info(doc.mesh()), "scene": doc.scene(), "missingObjects": doc.missing_objects(), "hash": doc.hash()}),
+            )
+        }
+        Cmd::Pick {
+            input,
+            origin,
+            direction,
+            scene,
+            objects,
+        } => {
+            if origin
+                .iter()
+                .chain(direction.iter())
+                .any(|v| !v.is_finite())
+                || direction.iter().all(|v| *v == 0.0)
+            {
+                return Err("ray must have finite coordinates and a nonzero direction".into());
+            }
+            let mut doc = open_document(&input, scene.as_deref(), objects.as_deref())?;
+            let hit = doc.pick(origin.map(|v| v as f32), direction.map(|v| v as f32));
+            Ok(json!({"hit": hit, "missingObjects": doc.missing_objects()}))
         }
         Cmd::Replay {
             input,
@@ -209,8 +289,18 @@ fn run(cli: Cli) -> Res<Value> {
             fov,
             width,
             height,
+            scene,
+            objects,
         } => {
-            let m = load(&input)?;
+            let doc = open_document(&input, scene.as_deref(), objects.as_deref())?;
+            let missing = doc.missing_objects();
+            if !missing.is_empty() {
+                return Err(format!(
+                    "cannot render: missing object meshes: {}",
+                    missing.join(", ")
+                ));
+            }
+            let m = doc.flattened();
             let (lo, hi) = m.bounds().unwrap_or(([0.0; 3], [0.0; 3]));
             let centre = [0, 1, 2].map(|i| (lo[i] as f64 + hi[i] as f64) / 2.0);
             let radius = (0..3)
