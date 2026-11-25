@@ -5,10 +5,11 @@
 //! `types/ops.d.ts` and included in the generated `.d.ts`.
 
 use brush_engine::io::{self, Format};
+use brush_engine::precision::{self, AlignAxis, AlignMode};
 use brush_engine::selection;
 use brush_engine::{
-    Actor, Axis, BoxRegion, Clipboard, Dab, Document as EngineDocument, Instance, Mesh, Op,
-    Placement, Scene,
+    Actor, Axis, BoxRegion, Clipboard, ConstraintRecord, Dab, Document as EngineDocument,
+    FeatureKind, FeatureSpec, Instance, Mesh, Op, Placement, Scene, Workplane,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -51,6 +52,25 @@ export interface Clipboard { items: ClipItem[]; pivot: [number, number, number];
 export interface Island { faces: number[]; isWholeMesh: boolean; bounds: [[number, number, number], [number, number, number]]; overlapsOtherFaces: boolean }
 export interface TangledCluster { faces: number[]; isWholeMesh: boolean; bounds: [[number, number, number], [number, number, number]]; islands: number }
 export interface DetachedPart { instanceId: string; object: string; anchor: [number, number, number]; faces: number; islands: number; isWholeMesh: boolean }
+export type AlignAxis = "x" | "y" | "z";
+export type AlignMode = "min" | "center" | "max";
+export interface DistanceMeasurement { distance: number; delta: [number, number, number] }
+export interface Workplane { id: string; name: string; origin: [number, number, number]; normal: [number, number, number]; xAxis: [number, number, number]; yAxis: [number, number, number] }
+export type FeatureKind =
+  | { kind: "box"; center: [number, number, number]; width: number; height: number; depth: number; yawDeg?: number; color?: [number, number, number] }
+  | { kind: "cylinder"; center: [number, number, number]; radius: number; height: number; segments?: number; color?: [number, number, number] }
+  | { kind: "extrusion"; polygon: [number, number][]; y0: number; height: number; color?: [number, number, number] }
+  | { kind: "linearPattern"; sourceFeature: string; count: number; step: [number, number, number] };
+export type FeatureStatus = { state: "valid" } | { state: "invalidated"; reason: string } | { state: "baked" };
+export interface FeatureRecord { id: string; name: string; kind: FeatureKind; dependsOn: string[]; objectKey: string; instanceIds: string[]; status: FeatureStatus; evaluatedHash: string }
+export interface FeatureSpec { id?: string; name: string; kind: FeatureKind }
+export type ConstraintKind =
+  | { kind: "equalDimension"; featureA: string; paramA: string; featureB: string; paramB: string }
+  | { kind: "coincidentOffset"; sourceFeature: string; targetFeature: string; offset: [number, number, number] }
+  | { kind: "fixedDimension"; feature: string; param: string; value: number };
+export interface ConstraintRecord { id: string; kind: ConstraintKind; enabled?: boolean }
+export interface ConstraintConflict { constraintId: string; reason: string }
+export interface SolveReport { updatedFeatures: string[]; conflicts: ConstraintConflict[] }
 "#;
 
 fn to_js<T: Serialize>(v: &T) -> Result<JsValue, JsError> {
@@ -715,6 +735,168 @@ impl Document {
         to_js(&part)
     }
 
+    // ---- precision: workplanes, alignment, editable features, persistent constraints (Phase E) ----
+
+    #[wasm_bindgen(unchecked_return_type = "Workplane")]
+    pub fn workplane(&self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.workplane())
+    }
+
+    #[wasm_bindgen(js_name = setWorkplane)]
+    pub fn set_workplane(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Workplane")] wp: JsValue,
+    ) -> Result<(), JsError> {
+        self.writable()?;
+        let wp: Workplane = from_js(wp, "workplane")?;
+        self.doc.set_workplane(wp);
+        Ok(())
+    }
+
+    #[wasm_bindgen(js_name = alignSelection)]
+    pub fn align_selection(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "readonly string[]")] ids: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "AlignAxis")] axis: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "AlignMode")] mode: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<u32, JsError> {
+        self.writable()?;
+        let ids: Vec<String> = from_js(ids, "ids")?;
+        let axis: AlignAxis = from_js(axis, "axis")?;
+        let mode: AlignMode = from_js(mode, "mode")?;
+        let n = self
+            .doc
+            .align_selection(&ids, axis, mode, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(n as u32)
+    }
+
+    #[wasm_bindgen(js_name = distributeSelection)]
+    pub fn distribute_selection(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "readonly string[]")] ids: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "AlignAxis")] axis: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<u32, JsError> {
+        self.writable()?;
+        let ids: Vec<String> = from_js(ids, "ids")?;
+        let axis: AlignAxis = from_js(axis, "axis")?;
+        let n = self
+            .doc
+            .distribute_selection(&ids, axis, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(n as u32)
+    }
+
+    #[wasm_bindgen(js_name = listFeatures, unchecked_return_type = "FeatureRecord[]")]
+    pub fn list_features(&self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.list_features())
+    }
+
+    #[wasm_bindgen(js_name = addFeature, unchecked_return_type = "FeatureRecord")]
+    pub fn add_feature(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "FeatureSpec")] spec: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let spec: FeatureSpec = from_js(spec, "feature")?;
+        let rec = self
+            .doc
+            .add_feature(spec, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&rec)
+    }
+
+    #[wasm_bindgen(js_name = updateFeature, unchecked_return_type = "SolveReport")]
+    pub fn update_feature(
+        &mut self,
+        id: &str,
+        #[wasm_bindgen(unchecked_param_type = "FeatureKind")] kind: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let kind: FeatureKind = from_js(kind, "featureKind")?;
+        let report = self
+            .doc
+            .update_feature(id, kind, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&report)
+    }
+
+    #[wasm_bindgen(js_name = validateFeatures, unchecked_return_type = "FeatureRecord[]")]
+    pub fn validate_features(&mut self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.validate_features())
+    }
+
+    #[wasm_bindgen(js_name = repairFeature, unchecked_return_type = "FeatureRecord")]
+    pub fn repair_feature(
+        &mut self,
+        id: &str,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let rec = self
+            .doc
+            .repair_feature(id, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&rec)
+    }
+
+    #[wasm_bindgen(js_name = bakeFeature, unchecked_return_type = "FeatureRecord")]
+    pub fn bake_feature(
+        &mut self,
+        id: &str,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let rec = self
+            .doc
+            .bake_feature(id, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&rec)
+    }
+
+    #[wasm_bindgen(js_name = listConstraints, unchecked_return_type = "ConstraintRecord[]")]
+    pub fn list_constraints(&self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.list_constraints())
+    }
+
+    #[wasm_bindgen(js_name = addConstraint, unchecked_return_type = "SolveReport")]
+    pub fn add_constraint(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "ConstraintRecord")] constraint: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let constraint: ConstraintRecord = from_js(constraint, "constraint")?;
+        let report = self
+            .doc
+            .add_constraint(constraint, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&report)
+    }
+
+    #[wasm_bindgen(js_name = removeConstraint)]
+    pub fn remove_constraint(&mut self, id: &str) -> Result<bool, JsError> {
+        self.writable()?;
+        Ok(self.doc.remove_constraint(id))
+    }
+
+    #[wasm_bindgen(js_name = solveConstraints, unchecked_return_type = "SolveReport")]
+    pub fn solve_constraints(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let report = self
+            .doc
+            .solve_constraints(actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&report)
+    }
+
     // ---- scene: linked instances of other objects ----
 
     /// The placed objects.
@@ -862,4 +1044,15 @@ impl Default for Document {
     fn default() -> Self {
         Document::new()
     }
+}
+
+/// Measures the exact 3D distance and axis deltas from `a` to `b`.
+#[wasm_bindgen(js_name = measureDistance, unchecked_return_type = "DistanceMeasurement")]
+pub fn measure_distance(
+    #[wasm_bindgen(unchecked_param_type = "[number, number, number]")] a: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "[number, number, number]")] b: JsValue,
+) -> Result<JsValue, JsError> {
+    let a: [f32; 3] = from_js(a, "a")?;
+    let b: [f32; 3] = from_js(b, "b")?;
+    to_js(&precision::measure_distance(a, b))
 }

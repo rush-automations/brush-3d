@@ -44,6 +44,7 @@ export {
 } from './select-controller';
 export {
   FREEFORM_MESH_PROFILE,
+  PRECISION_PROFILE,
   SIMPLE_BUILDER_PROFILE,
   WORKSPACE_PROFILES,
   WorkspaceSession,

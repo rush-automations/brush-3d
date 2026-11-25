@@ -4,7 +4,7 @@ import { expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
-  Document, copyGroup, dragDelta, freeIds, groupPivot, initSync, isProjectContainer, opsSchema, pasteGroup,
+  Document, copyGroup, dragDelta, freeIds, groupPivot, initSync, isProjectContainer, measureDistance, opsSchema, pasteGroup,
   rotateGroupAbout, scaleGroup, snapTurn, translateGroup, version, type Op,
 } from '../pkg/brush_wasm.js';
 
@@ -274,4 +274,42 @@ test('transactions, preview sessions, selection math, detach/join, and .brush pr
   expect((reopened.metadata() as { title: string }).title).toBe('WASM Project');
   expect(reopened.features()).toHaveLength(1);
 });
+
+test('Phase E: workplanes, alignment, editable features, constraints, and .brush round-trip in WASM', () => {
+  const m = measureDistance([0, 0, 0], [3, 4, 0]);
+  expect(m.distance).toBeCloseTo(5, 5);
+
+  const doc = new Document();
+  doc.setWorkplane({ id: 'wp:1', name: 'Level 2', origin: [0, 3, 0], normal: [0, 1, 0], xAxis: [1, 0, 0], yAxis: [0, 0, 1] });
+  expect(doc.workplane().origin).toEqual([0, 3, 0]);
+
+  const f1 = doc.addFeature({ id: 'col', name: 'Column', kind: { kind: 'box', center: [0, 0, 0], width: 0.5, height: 2.5, depth: 0.5 } }, undefined);
+  expect(f1.status.state).toBe('valid');
+  const f2 = doc.addFeature({ id: 'row', name: 'Row', kind: { kind: 'linearPattern', sourceFeature: 'col', count: 2, step: [2, 0, 0] } }, undefined);
+  expect(f2.instanceIds).toHaveLength(2);
+  expect(doc.scene().instances).toHaveLength(3);
+
+  const report = doc.addConstraint({ id: 'c:lock', kind: { kind: 'fixedDimension', feature: 'col', param: 'height', value: 3.0 } }, undefined);
+  expect(report.conflicts).toHaveLength(0);
+  expect(report.updatedFeatures).toContain('col');
+
+  // Reopen via .brush and verify feature graph + constraints + workplane survive.
+  const bytes = doc.saveProject();
+  const reopened = Document.open(bytes);
+  expect(reopened.workplane().origin).toEqual([0, 3, 0]);
+  expect(reopened.listFeatures()).toHaveLength(2);
+  expect(reopened.listConstraints()).toHaveLength(1);
+
+  // Direct edit invalidates feature -> repair restores -> bake converts to ordinary mesh.
+  reopened.apply({ op: 'removeObject', id: 'col:inst:0' }, undefined);
+  const validated = reopened.validateFeatures();
+  expect(validated[0].status.state).toBe('invalidated');
+  expect(reopened.repairFeature('col', undefined).status.state).toBe('valid');
+  expect(reopened.bakeFeature('col', undefined).status.state).toBe('baked');
+  expect(reopened.state().faces).toBeGreaterThan(0);
+
+  doc.free();
+  reopened.free();
+});
+
 
