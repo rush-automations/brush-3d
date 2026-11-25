@@ -1,12 +1,14 @@
 //! # brush-engine
 //!
 //! A [`Document`] is a mesh plus everything about how it got that way. Every change is a typed [`Op`] applied
-//! through [`Document::apply`], which:
+//! through [`Document::apply`] or grouped as a single user action through [`Document::apply_transaction`], which:
 //!
-//! - refuses invalid ops without touching the mesh;
-//! - records the op, who sent it (a person, an app, an AI model) and what it did in an append-only [`Journal`],
-//!   which can be stored as JSON Lines and replayed;
-//! - keeps an undo/redo history of snapshots, so undo and redo are instant whatever the op cost.
+//! - refuses invalid ops without touching the mesh or scene;
+//! - records the op (and `opsVersion`), who sent it (a person, an app, an AI model) and what it did in an append-only
+//!   [`Journal`], which can be stored as JSON Lines or inside a versioned `.brush` project container and replayed;
+//! - keeps an undo/redo history of snapshots and tracks a monotonic document [`Document::revision`];
+//! - supports isolated preview sessions (`begin_preview` / `update_preview` / `commit_preview` / `cancel_preview`)
+//!   that never pollute undo history or the journal.
 //!
 //! The original mesh is kept as the reference for `matchColor` with `fromReference` and for [`Document::revert`].
 //!
@@ -16,14 +18,21 @@
 
 pub use brush_io as io;
 pub use brush_mesh as mesh;
-pub use brush_mesh::{Mesh, Op, OpError, OpOutcome, OPS_VERSION};
+pub use brush_mesh::{
+    BoxRegion, Island, Mesh, Op, OpError, OpOutcome, TangledCluster, TopologyKind, TopologyRemap,
+    OPS_VERSION,
+};
 pub use brush_render as render;
 
+pub mod edit;
 pub mod place;
 pub mod scene;
+pub mod selection;
 
+pub use edit::DetachedPart;
 pub use place::{Piece, Placement};
 pub use scene::{Instance, Pick, Scene};
+pub use selection::{Axis, ClipItem, Clipboard};
 
 use std::collections::BTreeMap;
 
@@ -61,14 +70,30 @@ pub enum ActorKind {
     rename_all_fields = "camelCase"
 )]
 pub enum Entry {
-    /// An op was applied and changed the mesh.
+    /// An op was applied and changed the document.
     Applied {
         seq: u64,
         op: Op,
         #[serde(default, skip_serializing_if = "is_default")]
         actor: Actor,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ops_version: Option<String>,
         outcome: OpOutcome,
-        /// Content hash of the mesh after the op.
+        /// Content hash of the document after the op.
+        hash: String,
+    },
+    /// Several ops committed together as one atomic user action (one undo step).
+    Transaction {
+        seq: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        label: Option<String>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        ops_version: String,
+        ops: Vec<Op>,
+        #[serde(default, skip_serializing_if = "is_default")]
+        actor: Actor,
+        outcome: OpOutcome,
+        /// Content hash of the document after the transaction.
         hash: String,
     },
     Undo {
@@ -83,6 +108,18 @@ pub enum Entry {
         seq: u64,
         hash: String,
     },
+}
+
+impl Entry {
+    pub fn seq(&self) -> u64 {
+        match self {
+            Entry::Applied { seq, .. }
+            | Entry::Transaction { seq, .. }
+            | Entry::Undo { seq, .. }
+            | Entry::Redo { seq, .. }
+            | Entry::Revert { seq, .. } => *seq,
+        }
+    }
 }
 
 fn is_default(a: &Actor) -> bool {
@@ -119,15 +156,17 @@ impl Journal {
 #[serde(rename_all = "camelCase")]
 pub struct Applied {
     pub outcome: OpOutcome,
-    /// False when the op ran but left the mesh exactly as it was; nothing is recorded then.
+    /// False when the op ran but left the document exactly as it was; nothing is recorded then.
     pub changed: bool,
     pub hash: String,
 }
 
 #[derive(Clone)]
 struct Step {
-    /// None for a revert.
+    /// Representative op (or last op of a transaction); `None` for a revert.
     op: Option<Op>,
+    /// Optional human/tool transaction label (e.g. `"moveSelection"`, `"detachIsland"`).
+    label: Option<String>,
     /// The mesh on the other side of this step: before it on the undo stack, after it on the redo stack. None when
     /// the step left the mesh alone (moving placed objects), so those steps cost no mesh copy.
     mesh: Option<Mesh>,
@@ -165,6 +204,25 @@ struct Stroke {
     before: Option<Mesh>,
 }
 
+/// An open multi-step transaction (`begin_transaction` .. `commit_transaction`), collapsing several live mutations into
+/// one undo step and one journal entry.
+struct OpenTransaction {
+    label: Option<String>,
+    actor: Actor,
+    mesh_before: Mesh,
+    scene_before: Scene,
+    ops: Vec<Op>,
+    last_outcome: Option<OpOutcome>,
+}
+
+/// An active preview session (`begin_preview` .. `commit_preview` / `cancel_preview`).
+struct PreviewSession {
+    base_revision: u64,
+    mesh_before: Mesh,
+    scene_before: Scene,
+    ops: Vec<Op>,
+}
+
 pub struct Document {
     mesh: Mesh,
     original: Mesh,
@@ -177,9 +235,16 @@ pub struct Document {
     redo: Vec<Step>,
     journal: Journal,
     seq: u64,
+    revision: u64,
     undo_depth: usize,
     caches: Caches,
     stroke: Option<Stroke>,
+    open_tx: Option<OpenTransaction>,
+    preview: Option<PreviewSession>,
+    /// Optional host metadata preserved across `.brush` project save/open.
+    metadata: serde_json::Value,
+    /// Optional construction/parametric design-intent records preserved across `.brush` save/open.
+    features: Vec<serde_json::Value>,
 }
 
 impl Document {
@@ -195,10 +260,49 @@ impl Document {
             redo: Vec::new(),
             journal: Journal::default(),
             seq: 0,
+            revision: 0,
             undo_depth: DEFAULT_UNDO_DEPTH,
             caches: Caches::default(),
             stroke: None,
+            open_tx: None,
+            preview: None,
+            metadata: serde_json::Value::Object(serde_json::Map::new()),
+            features: Vec::new(),
         }
+    }
+
+    /// Monotonic document revision, incremented on every committed change (apply, transaction commit, undo, redo,
+    /// revert, or scene load). Unchanged during preview sessions.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Verifies that `expected` matches the current [`Document::revision`].
+    pub fn check_revision(&self, expected: u64) -> Result<(), OpError> {
+        if self.revision == expected {
+            Ok(())
+        } else {
+            Err(OpError::Invalid(format!(
+                "stale document revision: expected {expected}, current is {}",
+                self.revision
+            )))
+        }
+    }
+
+    pub fn metadata(&self) -> &serde_json::Value {
+        &self.metadata
+    }
+
+    pub fn set_metadata(&mut self, metadata: serde_json::Value) {
+        self.metadata = metadata;
+    }
+
+    pub fn features(&self) -> &[serde_json::Value] {
+        &self.features
+    }
+
+    pub fn set_features(&mut self, features: Vec<serde_json::Value>) {
+        self.features = features;
     }
 
     fn topology(&mut self) -> &SculptTopology {
@@ -232,7 +336,7 @@ impl Document {
             .collect()
     }
 
-    /// Replaces the mesh after undo, redo or revert, keeping caches that still apply.
+    /// Replaces the mesh after undo, redo, revert, or preview restore, keeping caches that still apply.
     fn swap_mesh(&mut self, next: Mesh) -> Mesh {
         let topology_changed = next.indices != self.mesh.indices;
         self.caches.invalidate(topology_changed);
@@ -245,20 +349,24 @@ impl Document {
         (mesh, std::mem::replace(&mut self.scene, scene))
     }
 
-    /// The document's hash: the mesh's content hash, extended with the scene when anything is placed. Documents without
-    /// placed objects hash exactly as their mesh does.
-    pub fn hash(&self) -> String {
-        let mesh = self.mesh.content_hash();
-        if self.scene.is_empty() {
-            return mesh;
+    fn hash_pair(mesh: &Mesh, scene: &Scene) -> String {
+        let m = mesh.content_hash();
+        if scene.is_empty() {
+            return m;
         }
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-        let scene = serde_json::to_string(&self.scene).expect("scenes serialise");
-        for b in mesh.bytes().chain(scene.bytes()) {
+        let s = serde_json::to_string(scene).expect("scenes serialise");
+        for b in m.bytes().chain(s.bytes()) {
             h ^= u64::from(b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
         }
         format!("{h:016x}")
+    }
+
+    /// The document's hash: the mesh's content hash, extended with the scene when anything is placed. Documents without
+    /// placed objects hash exactly as their mesh does.
+    pub fn hash(&self) -> String {
+        Self::hash_pair(&self.mesh, &self.scene)
     }
 
     /// The placed objects.
@@ -274,8 +382,18 @@ impl Document {
         self.objects.insert(object, mesh);
     }
 
+    pub(crate) fn remove_object_asset(&mut self, object: &str) {
+        self.object_bvhs.remove(object);
+        self.objects.remove(object);
+    }
+
     pub fn object(&self, object: &str) -> Option<&Mesh> {
         self.objects.get(object)
+    }
+
+    /// Keys of every object mesh currently loaded in this document, in deterministic sorted order.
+    pub fn loaded_objects(&self) -> Vec<String> {
+        self.objects.keys().cloned().collect()
     }
 
     /// Area-weighted vertex normals of an object's mesh, 3 per vertex, for drawing its instances.
@@ -292,7 +410,12 @@ impl Document {
     /// Replaces the placed objects with a scene as stored (when opening a model), as the saved state. Not an edit:
     /// the journal is untouched and undo history is cleared.
     pub fn load_scene(&mut self, scene: Scene) {
+        self.cancel_preview();
+        let _ = self.cancel_transaction();
         self.end_stroke();
+        if self.scene != scene {
+            self.revision += 1;
+        }
         self.original_scene = scene.clone();
         self.scene = scene;
         self.undo.clear();
@@ -481,8 +604,16 @@ impl Document {
     pub fn last_op(&self) -> Option<&Op> {
         self.undo.last().and_then(|s| s.op.as_ref())
     }
-    /// Changes since load or the last [`Document::mark_saved`].
+    /// Label of the transaction the next undo would take back, when it was recorded with one.
+    pub fn last_transaction_label(&self) -> Option<&str> {
+        self.undo.last().and_then(|s| s.label.as_deref())
+    }
+    /// Changes since load or the last [`Document::mark_saved`], evaluated against the committed state (ignoring an
+    /// uncommitted preview).
     pub fn is_dirty(&self) -> bool {
+        if let Some(p) = &self.preview {
+            return p.mesh_before != self.original || p.scene_before != self.original_scene;
+        }
         self.mesh != self.original || self.scene != self.original_scene
     }
 
@@ -491,13 +622,76 @@ impl Document {
         self.seq
     }
 
+    fn push_undo_step(&mut self, step: Step) {
+        self.undo.push(step);
+        if self.undo.len() > self.undo_depth {
+            self.undo.remove(0);
+        }
+        self.redo.clear();
+    }
+
+    /// Executes a single validated op directly onto `self.mesh` / `self.scene` and updates caches, without recording
+    /// undo or journal entries. Used internally by transactions and previews.
+    fn execute_unrecorded(&mut self, op: &Op) -> Result<(OpOutcome, bool), OpError> {
+        op.validate()?;
+        if op.is_scene_op() {
+            let scene_before = self.scene.clone();
+            let (outcome, mesh_changed) = self.apply_scene(op)?;
+            if mesh_changed {
+                self.caches.invalidate(true);
+            }
+            let changed = self.scene != scene_before || mesh_changed;
+            return Ok((outcome, changed));
+        }
+        let before = self.mesh.clone();
+        let outcome = op.apply(
+            &mut self.mesh,
+            Context {
+                reference: Some(&self.original),
+                topology: None,
+            },
+        )?;
+        let changed = self.mesh != before;
+        if changed {
+            self.caches.invalidate(op.changes_topology());
+        }
+        Ok((outcome, changed))
+    }
+
     /// Applies one op. An op that changes nothing is not recorded and cannot be undone.
     ///
     /// A `sculpt` op also opens a stroke: [`Document::extend_stroke`] then adds dabs to it in place, so a stroke drawn
     /// live is still one op in the journal and one step of undo. Any other call closes the stroke.
     pub fn apply(&mut self, op: Op, actor: Actor) -> Result<Applied, OpError> {
+        self.cancel_preview();
         self.end_stroke();
         op.validate()?;
+
+        if self.open_tx.is_some() {
+            if let Op::Sculpt { .. } = op {
+                self.stroke = Some(Stroke {
+                    touched: vec![false; self.mesh.vertex_count()],
+                    recorded: false,
+                    op: op.clone(),
+                    actor,
+                    before: None,
+                });
+                return self.sculpt_piece(&op);
+            }
+            let (outcome, changed) = self.execute_unrecorded(&op)?;
+            let hash = self.hash();
+            if changed {
+                let tx = self.open_tx.as_mut().unwrap();
+                tx.ops.push(op);
+                tx.last_outcome = Some(outcome);
+            }
+            return Ok(Applied {
+                outcome,
+                changed,
+                hash,
+            });
+        }
+
         if let Op::Sculpt { .. } = op {
             self.stroke = Some(Stroke {
                 touched: vec![false; self.mesh.vertex_count()],
@@ -559,22 +753,21 @@ impl Document {
         scene_before: Scene,
     ) {
         let seq = self.next_seq();
+        self.revision += 1;
         self.journal.entries.push(Entry::Applied {
             seq,
             op: op.clone(),
             actor,
+            ops_version: Some(OPS_VERSION.to_string()),
             outcome,
             hash,
         });
-        self.undo.push(Step {
+        self.push_undo_step(Step {
             op: Some(op),
+            label: None,
             mesh: before,
             scene: scene_before,
         });
-        if self.undo.len() > self.undo_depth {
-            self.undo.remove(0);
-        }
-        self.redo.clear();
     }
 
     /// Adds dabs to the open sculpt stroke. The result is exactly what the whole stroke would give as one op.
@@ -666,6 +859,21 @@ impl Document {
         self.caches.invalidate(false);
         let hash = self.hash();
         let stroke = self.stroke.as_mut().unwrap();
+        if let Some(tx) = &mut self.open_tx {
+            let op = stroke.op.clone();
+            if !stroke.recorded {
+                stroke.recorded = true;
+                tx.ops.push(op);
+            } else if let Some(last) = tx.ops.last_mut() {
+                *last = op;
+            }
+            tx.last_outcome = Some(outcome);
+            return Ok(Applied {
+                outcome,
+                changed: moved > 0,
+                hash,
+            });
+        }
         if !stroke.recorded {
             stroke.recorded = true;
             let (op, actor, before) = (
@@ -699,12 +907,209 @@ impl Document {
         })
     }
 
-    /// Applies ops in order, all or nothing: if one fails, the document is left as it was and the error says which.
+    // ---- explicit transactions (one user action = one undo step) ----
+
+    /// Whether an open streaming transaction (`begin_transaction`) is currently active.
+    pub fn in_transaction(&self) -> bool {
+        self.open_tx.is_some()
+    }
+
+    /// Opens a multi-step transaction so subsequent `apply` / `extend_stroke` calls collapse into one undo step when
+    /// [`Document::commit_transaction`] is called (or roll back completely on [`Document::cancel_transaction`]).
+    pub fn begin_transaction(
+        &mut self,
+        label: Option<String>,
+        actor: Actor,
+    ) -> Result<u64, OpError> {
+        if self.open_tx.is_some() {
+            return Err(OpError::Invalid("a transaction is already open".into()));
+        }
+        self.cancel_preview();
+        self.end_stroke();
+        self.open_tx = Some(OpenTransaction {
+            label,
+            actor,
+            mesh_before: self.mesh.clone(),
+            scene_before: self.scene.clone(),
+            ops: Vec::new(),
+            last_outcome: None,
+        });
+        Ok(self.revision)
+    }
+
+    /// Commits the open streaming transaction as a single undo step and journal entry. Returns `None` if nothing
+    /// changed since `begin_transaction`.
+    pub fn commit_transaction(&mut self) -> Option<Applied> {
+        self.end_stroke();
+        let tx = self.open_tx.take()?;
+        let mesh_changed = self.mesh != tx.mesh_before;
+        let scene_changed = self.scene != tx.scene_before;
+        if (!mesh_changed && !scene_changed) || tx.ops.is_empty() {
+            return None;
+        }
+        let outcome = tx.last_outcome.unwrap_or(OpOutcome {
+            count: tx.ops.len() as u64,
+            vertices: self.mesh.vertex_count() as u64,
+            faces: self.mesh.face_count() as u64,
+        });
+        let hash = self.hash();
+        let seq = self.next_seq();
+        self.revision += 1;
+        let last_op = tx.ops.last().cloned();
+        self.journal.entries.push(Entry::Transaction {
+            seq,
+            label: tx.label.clone(),
+            ops_version: OPS_VERSION.to_string(),
+            ops: tx.ops,
+            actor: tx.actor,
+            outcome,
+            hash: hash.clone(),
+        });
+        self.push_undo_step(Step {
+            op: last_op,
+            label: tx.label,
+            mesh: mesh_changed.then_some(tx.mesh_before),
+            scene: tx.scene_before,
+        });
+        Some(Applied {
+            outcome,
+            changed: true,
+            hash,
+        })
+    }
+
+    /// Rolls back the open streaming transaction, restoring the exact mesh and scene from `begin_transaction` without
+    /// touching undo history, the journal, or the document revision.
+    pub fn cancel_transaction(&mut self) -> bool {
+        self.end_stroke();
+        let Some(tx) = self.open_tx.take() else {
+            return false;
+        };
+        self.swap_mesh(tx.mesh_before);
+        self.scene = tx.scene_before;
+        true
+    }
+
+    /// Applies `ops` atomically and records the entire batch as **one** undo step and **one** [`Entry::Transaction`]
+    /// in the journal. If any op fails, the document is left untouched and `(index, error)` identifies which failed.
+    pub fn apply_transaction(
+        &mut self,
+        ops: Vec<Op>,
+        label: Option<String>,
+        actor: Actor,
+    ) -> Result<Vec<Applied>, (usize, OpError)> {
+        self.cancel_preview();
+        self.end_stroke();
+        for (i, op) in ops.iter().enumerate() {
+            op.validate().map_err(|e| (i, e))?;
+        }
+        if ops.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // If nested inside an already-open streaming transaction, execute atomically and append to the outer tx.
+        if self.open_tx.is_some() {
+            let mesh_saved = self.mesh.clone();
+            let scene_saved = self.scene.clone();
+            let mut results = Vec::with_capacity(ops.len());
+            let mut changed_ops = Vec::new();
+            let mut last_outcome = None;
+            for (i, op) in ops.into_iter().enumerate() {
+                match self.execute_unrecorded(&op) {
+                    Ok((outcome, changed)) => {
+                        let hash = self.hash();
+                        if changed {
+                            changed_ops.push(op);
+                            last_outcome = Some(outcome);
+                        }
+                        results.push(Applied {
+                            outcome,
+                            changed,
+                            hash,
+                        });
+                    }
+                    Err(e) => {
+                        self.swap_mesh(mesh_saved);
+                        self.scene = scene_saved;
+                        return Err((i, e));
+                    }
+                }
+            }
+            if !changed_ops.is_empty() {
+                let tx = self.open_tx.as_mut().unwrap();
+                tx.ops.extend(changed_ops);
+                tx.last_outcome = last_outcome;
+            }
+            return Ok(results);
+        }
+
+        let mesh_before = self.mesh.clone();
+        let scene_before = self.scene.clone();
+        let mut results = Vec::with_capacity(ops.len());
+        let mut applied_ops = Vec::with_capacity(ops.len());
+        let mut last_outcome = None;
+
+        for (i, op) in ops.into_iter().enumerate() {
+            match self.execute_unrecorded(&op) {
+                Ok((outcome, changed)) => {
+                    let hash = self.hash();
+                    if changed {
+                        applied_ops.push(op);
+                        last_outcome = Some(outcome);
+                    }
+                    results.push(Applied {
+                        outcome,
+                        changed,
+                        hash,
+                    });
+                }
+                Err(e) => {
+                    self.swap_mesh(mesh_before);
+                    self.scene = scene_before;
+                    return Err((i, e));
+                }
+            }
+        }
+
+        let mesh_changed = self.mesh != mesh_before;
+        let scene_changed = self.scene != scene_before;
+        if (mesh_changed || scene_changed) && !applied_ops.is_empty() {
+            let outcome = last_outcome.unwrap_or(OpOutcome {
+                count: applied_ops.len() as u64,
+                vertices: self.mesh.vertex_count() as u64,
+                faces: self.mesh.face_count() as u64,
+            });
+            let hash = self.hash();
+            let seq = self.next_seq();
+            self.revision += 1;
+            let last_op = applied_ops.last().cloned();
+            self.journal.entries.push(Entry::Transaction {
+                seq,
+                label: label.clone(),
+                ops_version: OPS_VERSION.to_string(),
+                ops: applied_ops,
+                actor,
+                outcome,
+                hash,
+            });
+            self.push_undo_step(Step {
+                op: last_op,
+                label,
+                mesh: mesh_changed.then_some(mesh_before),
+                scene: scene_before,
+            });
+        }
+        Ok(results)
+    }
+
+    /// Applies ops in order, all or nothing (recording one undo step per op for backward-compatible callers).
+    /// Prefer [`Document::apply_transaction`] when one user action should produce a single undo step.
     pub fn apply_all(
         &mut self,
         ops: Vec<Op>,
         actor: Actor,
     ) -> Result<Vec<Applied>, (usize, OpError)> {
+        self.cancel_preview();
         for (i, op) in ops.iter().enumerate() {
             op.validate().map_err(|e| (i, e))?;
         }
@@ -715,6 +1120,7 @@ impl Document {
             self.redo.clone(),
             self.journal.entries.len(),
             self.seq,
+            self.revision,
         );
         let mut out = Vec::with_capacity(ops.len());
         for (i, op) in ops.into_iter().enumerate() {
@@ -728,6 +1134,7 @@ impl Document {
                     self.redo = saved.2;
                     self.journal.entries.truncate(saved.3);
                     self.seq = saved.4;
+                    self.revision = saved.5;
                     return Err((i, e));
                 }
             }
@@ -736,8 +1143,135 @@ impl Document {
         Ok(out)
     }
 
+    // ---- preview sessions (begin -> update -> commit / cancel) ----
+
+    /// True while an uncommitted preview session is active.
+    pub fn in_preview(&self) -> bool {
+        self.preview.is_some()
+    }
+
+    /// Starts (or resets) a preview session anchored at the current [`Document::revision`]. Previews mutate the live
+    /// mesh/scene for display without touching undo history, redo history, the journal, or the document revision.
+    pub fn begin_preview(&mut self) -> Result<u64, OpError> {
+        if self.open_tx.is_some() {
+            return Err(OpError::Invalid(
+                "cannot start a preview while a transaction is open".into(),
+            ));
+        }
+        self.end_stroke();
+        if let Some(p) = &mut self.preview {
+            let m = p.mesh_before.clone();
+            let s = p.scene_before.clone();
+            p.ops.clear();
+            let base = p.base_revision;
+            self.swap_mesh(m);
+            self.scene = s;
+            return Ok(base);
+        }
+        let base = self.revision;
+        self.preview = Some(PreviewSession {
+            base_revision: base,
+            mesh_before: self.mesh.clone(),
+            scene_before: self.scene.clone(),
+            ops: Vec::new(),
+        });
+        Ok(base)
+    }
+
+    /// Replaces the current preview with `ops` evaluated from the preview's starting state. When `expected_revision`
+    /// is given, rejects stale updates computed against a different document revision.
+    pub fn update_preview(
+        &mut self,
+        ops: Vec<Op>,
+        expected_revision: Option<u64>,
+    ) -> Result<Vec<Applied>, (usize, OpError)> {
+        if self.preview.is_none() {
+            self.begin_preview().map_err(|e| (0, e))?;
+        }
+        let base_rev = self.preview.as_ref().unwrap().base_revision;
+        if let Some(expected) = expected_revision {
+            if expected != base_rev {
+                return Err((
+                    0,
+                    OpError::Invalid(format!(
+                        "stale preview revision: expected {expected}, base is {base_rev}"
+                    )),
+                ));
+            }
+        }
+        for (i, op) in ops.iter().enumerate() {
+            op.validate().map_err(|e| (i, e))?;
+        }
+        let (m0, s0) = {
+            let p = self.preview.as_ref().unwrap();
+            (p.mesh_before.clone(), p.scene_before.clone())
+        };
+        self.swap_mesh(m0.clone());
+        self.scene = s0.clone();
+
+        let mut results = Vec::with_capacity(ops.len());
+        for (i, op) in ops.iter().enumerate() {
+            match self.execute_unrecorded(op) {
+                Ok((outcome, changed)) => {
+                    results.push(Applied {
+                        outcome,
+                        changed,
+                        hash: self.hash(),
+                    });
+                }
+                Err(e) => {
+                    self.swap_mesh(m0);
+                    self.scene = s0;
+                    self.preview.as_mut().unwrap().ops.clear();
+                    return Err((i, e));
+                }
+            }
+        }
+        self.preview.as_mut().unwrap().ops = ops;
+        Ok(results)
+    }
+
+    /// Cancels the active preview session and restores the exact starting mesh and scene.
+    pub fn cancel_preview(&mut self) -> bool {
+        let Some(p) = self.preview.take() else {
+            return false;
+        };
+        self.swap_mesh(p.mesh_before);
+        self.scene = p.scene_before;
+        true
+    }
+
+    /// Commits the active preview session as one atomic transaction (one undo step). Returns `Ok(None)` if no preview
+    /// was active or the previewed operations made no net change.
+    pub fn commit_preview(
+        &mut self,
+        label: Option<String>,
+        actor: Actor,
+    ) -> Result<Option<Applied>, OpError> {
+        let Some(p) = self.preview.take() else {
+            return Ok(None);
+        };
+        self.swap_mesh(p.mesh_before);
+        self.scene = p.scene_before;
+        if p.ops.is_empty() {
+            return Ok(None);
+        }
+        let results = self
+            .apply_transaction(p.ops, label, actor)
+            .map_err(|(_, e)| e)?;
+        let any_changed = results.iter().any(|r| r.changed);
+        if !any_changed {
+            return Ok(None);
+        }
+        Ok(results.into_iter().last())
+    }
+
+    // ---- history ----
+
     /// Takes back the last change. False when there is nothing to undo.
     pub fn undo(&mut self) -> bool {
+        self.cancel_preview();
+        let _ = self.cancel_transaction();
         let Some(step) = self.undo.pop() else {
             return false;
         };
@@ -745,9 +1279,11 @@ impl Document {
         let (mesh, scene) = self.swap_state(step.mesh, step.scene);
         self.redo.push(Step {
             op: step.op,
+            label: step.label,
             mesh,
             scene,
         });
+        self.revision += 1;
         let (seq, hash) = (self.next_seq(), self.hash());
         self.journal.entries.push(Entry::Undo { seq, hash });
         true
@@ -755,6 +1291,8 @@ impl Document {
 
     /// Puts back the last undone change. False when there is nothing to redo.
     pub fn redo(&mut self) -> bool {
+        self.cancel_preview();
+        let _ = self.cancel_transaction();
         let Some(step) = self.redo.pop() else {
             return false;
         };
@@ -762,16 +1300,20 @@ impl Document {
         let (mesh, scene) = self.swap_state(step.mesh, step.scene);
         self.undo.push(Step {
             op: step.op,
+            label: step.label,
             mesh,
             scene,
         });
+        self.revision += 1;
         let (seq, hash) = (self.next_seq(), self.hash());
         self.journal.entries.push(Entry::Redo { seq, hash });
         true
     }
 
-    /// Back to the mesh as loaded (or last saved). Kept as one undo step.
+    /// Back to the mesh and scene as loaded (or last saved). Kept as one undo step.
     pub fn revert(&mut self) -> bool {
+        self.cancel_preview();
+        let _ = self.cancel_transaction();
         if !self.is_dirty() {
             return false;
         }
@@ -780,23 +1322,99 @@ impl Document {
         let (mesh, scene) = self.swap_state(mesh, self.original_scene.clone());
         self.undo.push(Step {
             op: None,
+            label: Some("revert".into()),
             mesh,
             scene,
         });
         self.redo.clear();
+        self.revision += 1;
         let (seq, hash) = (self.next_seq(), self.hash());
         self.journal.entries.push(Entry::Revert { seq, hash });
         true
     }
 
-    /// The current mesh becomes the new original; history is cleared (the journal is kept).
+    /// The current mesh and scene become the new original; undo/redo stacks are cleared (the journal is kept).
     pub fn mark_saved(&mut self) {
+        self.cancel_preview();
+        let _ = self.cancel_transaction();
         self.end_stroke();
         self.original = self.mesh.clone();
         self.original_scene = self.scene.clone();
         self.undo.clear();
         self.redo.clear();
     }
+
+    // ---- versioned project container persistence (.brush) ----
+
+    /// Packages the entire editing state (surface mesh, baseline if dirty, linked object meshes, scene placements,
+    /// edit journal, revision, and optional metadata/features) into a versioned `.brush` container. Uncommitted
+    /// previews are excluded automatically.
+    pub fn save_project(&self) -> Vec<u8> {
+        let (surface, scene) = match &self.preview {
+            Some(p) => (&p.mesh_before, &p.scene_before),
+            None => (&self.mesh, &self.scene),
+        };
+        let original_surface = (surface != &self.original).then(|| self.original.clone());
+        let scene_json = serde_json::to_string(scene).expect("scene serialises");
+        let original_scene_json = (scene != &self.original_scene)
+            .then(|| serde_json::to_string(&self.original_scene).expect("scene serialises"));
+
+        io::write_project(&io::ProjectContainer {
+            version: io::PROJECT_VERSION,
+            ops_version: OPS_VERSION.to_string(),
+            revision: self.revision,
+            surface: surface.clone(),
+            original_surface,
+            scene_json,
+            original_scene_json,
+            objects: self.objects.clone(),
+            journal_jsonl: self.journal.to_jsonl(),
+            metadata: self.metadata.clone(),
+            features: self.features.clone(),
+        })
+    }
+
+    /// Opens a versioned `.brush` project container saved by [`Document::save_project`].
+    pub fn open_project(bytes: &[u8]) -> Result<Document, io::IoError> {
+        let proj = io::read_project(bytes)?;
+        let scene: Scene = serde_json::from_str(&proj.scene_json)
+            .map_err(|e| io::IoError::Malformed(format!("invalid project scene: {e}")))?;
+        let original_scene = match proj.original_scene_json {
+            Some(s) => serde_json::from_str(&s).map_err(|e| {
+                io::IoError::Malformed(format!("invalid project baseline scene: {e}"))
+            })?,
+            None => scene.clone(),
+        };
+        let journal = Journal::from_jsonl(&proj.journal_jsonl)
+            .map_err(|e| io::IoError::Malformed(format!("invalid project journal: {e}")))?;
+        let seq = journal.entries.iter().map(Entry::seq).max().unwrap_or(0);
+        let original = proj
+            .original_surface
+            .unwrap_or_else(|| proj.surface.clone());
+
+        Ok(Document {
+            mesh: proj.surface,
+            original,
+            scene,
+            original_scene,
+            objects: proj.objects,
+            object_bvhs: BTreeMap::new(),
+            undo: Vec::new(),
+            redo: Vec::new(),
+            journal,
+            seq,
+            revision: proj.revision,
+            undo_depth: DEFAULT_UNDO_DEPTH,
+            caches: Caches::default(),
+            stroke: None,
+            open_tx: None,
+            preview: None,
+            metadata: proj.metadata,
+            features: proj.features,
+        })
+    }
+
+    // ---- journal replay ----
 
     /// Replays a journal's applied ops onto `mesh`, checking each resulting hash. Returns the first entry whose hash
     /// did not match, which means the engines disagree.
@@ -831,6 +1449,25 @@ impl Document {
                             seq: *seq,
                             expected: hash.clone(),
                             got: got.hash,
+                        });
+                    }
+                }
+                Entry::Transaction {
+                    seq,
+                    label,
+                    ops,
+                    actor,
+                    hash,
+                    ..
+                } => {
+                    doc.apply_transaction(ops.clone(), label.clone(), actor.clone())
+                        .map_err(|(_, err)| ReplayError::Op(*seq, err))?;
+                    let got_hash = doc.hash();
+                    if &got_hash != hash {
+                        return Err(ReplayError::Diverged {
+                            seq: *seq,
+                            expected: hash.clone(),
+                            got: got_hash,
                         });
                     }
                 }

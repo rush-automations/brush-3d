@@ -110,3 +110,44 @@ fn glb_has_a_valid_container() {
     assert_eq!(doc["accessors"][2]["count"], 3);
     assert_eq!(Format::sniff(&g), Some(Format::Glb));
 }
+
+#[test]
+fn project_container_round_trips_meshes_objects_history_and_design_intent() {
+    use std::collections::BTreeMap;
+
+    let mut surface = tri();
+    surface
+        .set_attribute("semantic", ScalarKind::U8, vec![1.0, 2.0, 3.0])
+        .unwrap();
+    let mut objects = BTreeMap::new();
+    objects.insert("scan:chair".to_string(), tri());
+
+    let proj = ProjectContainer {
+        version: PROJECT_VERSION,
+        ops_version: "0.5.0".to_string(),
+        revision: 7,
+        surface,
+        original_surface: Some(Mesh::default()),
+        scene_json: r#"{"instances":[{"id":"o1","object":"scan:chair","position":[1,0,2]}]}"#
+            .to_string(),
+        original_scene_json: Some(r#"{"instances":[]}"#.to_string()),
+        objects,
+        journal_jsonl: "{\"event\":\"applied\",\"seq\":1}\n".to_string(),
+        metadata: serde_json::json!({"title": "Living Room"}),
+        features: vec![serde_json::json!({"kind": "extrude", "height": 2.4})],
+    };
+
+    let bytes = write_project(&proj);
+    assert!(is_project_container(&bytes));
+    assert_eq!(Format::sniff(&bytes), None);
+
+    let back = read_project(&bytes).unwrap();
+    assert_eq!(back, proj);
+
+    // Truncation and unsupported versions are rejected cleanly.
+    assert!(read_project(&bytes[..10]).is_err());
+    assert!(read_project(&bytes[..bytes.len() - 5]).is_err());
+    let mut future = bytes.clone();
+    future[8..12].copy_from_slice(&99u32.to_le_bytes());
+    assert!(read_project(&future).is_err());
+}

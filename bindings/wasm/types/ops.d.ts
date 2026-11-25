@@ -10,6 +10,11 @@ export type BrushEngineOperation =
       op: "removeBox";
     }
   | {
+      faces: number[];
+      invert?: boolean;
+      op: "removeFaces";
+    }
+  | {
       box: BoxRegion;
       op: "carveBox";
     }

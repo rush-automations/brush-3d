@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Bumped on any change to an op's meaning or fields. Additive changes (a new op, a new optional field) bump the
 /// minor version; anything else bumps the major.
-pub const OPS_VERSION: &str = "0.4.0";
+pub const OPS_VERSION: &str = "0.5.0";
 
 pub type Rgb = [u8; 3];
 
@@ -29,6 +29,13 @@ pub enum Op {
     RemoveBox {
         #[serde(rename = "box")]
         region: BoxRegion,
+        #[serde(default)]
+        invert: bool,
+    },
+    /// Delete the listed faces by index (or with `invert` keep only the listed faces). Orphaned vertices are dropped
+    /// and surviving vertices/faces keep their relative order. Count: faces removed.
+    RemoveFaces {
+        faces: Vec<u32>,
         #[serde(default)]
         invert: bool,
     },
@@ -560,6 +567,7 @@ impl Op {
     pub fn name(&self) -> &'static str {
         match self {
             Op::RemoveBox { .. } => "removeBox",
+            Op::RemoveFaces { .. } => "removeFaces",
             Op::CarveBox { .. } => "carveBox",
             Op::Smooth { .. } => "smooth",
             Op::Decimate { .. } => "decimate",
@@ -600,6 +608,12 @@ impl Op {
             | Op::Paint { region, .. }
             | Op::AddBox { region, .. }
             | Op::AddRamp { region, .. } => check_box(region),
+            Op::RemoveFaces { faces, .. } => {
+                if faces.len() > crate::kernel::MAX_FACES {
+                    return Err(OpError::Invalid("too many faces in removeFaces".into()));
+                }
+                Ok(())
+            }
             Op::MatchColor {
                 region,
                 max_dist,
@@ -892,12 +906,102 @@ impl Op {
         )
     }
 
+    /// How this op affects existing vertex and face references.
+    pub fn topology_kind(&self) -> crate::islands::TopologyKind {
+        use crate::islands::TopologyKind;
+        if !self.changes_topology() {
+            return TopologyKind::Preserved;
+        }
+        match self {
+            Op::AddBox { .. }
+            | Op::AddRamp { .. }
+            | Op::AddFrustum { .. }
+            | Op::AddSphere { .. }
+            | Op::AddLathe { .. }
+            | Op::AddExtrude { .. }
+            | Op::CloneBox { .. }
+            | Op::FillHoles { .. }
+            | Op::BakeObject { .. } => TopologyKind::Appended,
+            Op::RemoveBox { .. } | Op::RemoveFaces { .. } => TopologyKind::Remapped,
+            Op::CarveBox { .. }
+            | Op::Decimate { .. }
+            | Op::Simplify { .. }
+            | Op::Subdivide { .. } => TopologyKind::Invalidated,
+            _ => TopologyKind::Preserved,
+        }
+    }
+
+    /// Applies the op to `mesh` and returns both its outcome and exact reference remapping.
+    pub fn apply_with_remap(
+        &self,
+        mesh: &mut Mesh,
+        cx: Context,
+    ) -> Result<(OpOutcome, crate::islands::TopologyRemap), OpError> {
+        self.validate()?;
+        let v0 = mesh.vertex_count();
+        let f0 = mesh.face_count();
+        match self {
+            Op::RemoveBox { region, invert } => {
+                let (count, remap) = mesh.remove_box_with_remap(Area::from(region), *invert);
+                Ok((
+                    OpOutcome {
+                        count: count as u64,
+                        vertices: mesh.vertex_count() as u64,
+                        faces: mesh.face_count() as u64,
+                    },
+                    remap,
+                ))
+            }
+            Op::RemoveFaces { faces, invert } => {
+                for &f in faces {
+                    if f as usize >= f0 {
+                        return Err(OpError::Invalid(format!(
+                            "face {f} is out of range (mesh has {f0} faces)"
+                        )));
+                    }
+                }
+                let (count, remap) = mesh.remove_faces_with_remap(faces, *invert);
+                Ok((
+                    OpOutcome {
+                        count: count as u64,
+                        vertices: mesh.vertex_count() as u64,
+                        faces: mesh.face_count() as u64,
+                    },
+                    remap,
+                ))
+            }
+            _ => {
+                let out = self.apply(mesh, cx)?;
+                let remap = match self.topology_kind() {
+                    crate::islands::TopologyKind::Preserved => {
+                        crate::islands::TopologyRemap::preserved(v0, f0)
+                    }
+                    crate::islands::TopologyKind::Appended => {
+                        crate::islands::TopologyRemap::appended(v0, f0)
+                    }
+                    _ => crate::islands::TopologyRemap::invalidated(v0, f0),
+                };
+                Ok((out, remap))
+            }
+        }
+    }
+
     /// Applies the op to `mesh`. Nothing changes when it fails validation.
     pub fn apply(&self, mesh: &mut Mesh, cx: Context) -> Result<OpOutcome, OpError> {
         self.validate()?;
         let f0 = mesh.face_count();
         let count = match self {
             Op::RemoveBox { region, invert } => mesh.remove_box(Area::from(region), *invert),
+            Op::RemoveFaces { faces, invert } => {
+                for &f in faces {
+                    if f as usize >= f0 {
+                        return Err(OpError::Invalid(format!(
+                            "face {f} is out of range (mesh has {f0} faces)"
+                        )));
+                    }
+                }
+                mesh.remove_faces(faces, *invert)
+            }
             Op::CarveBox { region } => mesh.carve_box(Area::from(region)),
             Op::Smooth {
                 region,

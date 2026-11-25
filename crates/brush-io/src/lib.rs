@@ -9,10 +9,15 @@
 mod glb;
 mod obj;
 mod ply;
+pub mod project;
 
 pub use glb::write_glb;
 pub use obj::{read_obj, write_obj};
 pub use ply::{read_ply, write_ply, PlyOptions};
+pub use project::{
+    is_project_container, read_project, write_project, ProjectContainer, PROJECT_MAGIC,
+    PROJECT_VERSION,
+};
 
 use brush_mesh::Mesh;
 

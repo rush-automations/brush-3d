@@ -5,7 +5,11 @@
 //! `types/ops.d.ts` and included in the generated `.d.ts`.
 
 use brush_engine::io::{self, Format};
-use brush_engine::{Actor, Dab, Document as EngineDocument, Mesh, Op, Placement, Scene};
+use brush_engine::selection;
+use brush_engine::{
+    Actor, Axis, BoxRegion, Clipboard, Dab, Document as EngineDocument, Instance, Mesh, Op,
+    Placement, Scene,
+};
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
 
@@ -19,9 +23,13 @@ export interface Actor { id?: string; kind?: "person" | "model" | "app" }
 export interface Applied { outcome: { count: number; vertices: number; faces: number }; changed: boolean; hash: string }
 export interface Hit { face: number; t: number; point: [number, number, number]; normal: [number, number, number]; barycentric: [number, number, number] }
 export interface DocState {
-  vertices: number; faces: number; hash: string;
+  vertices: number; faces: number; hash: string; documentHash: string;
+  revision: number; opsVersion: string;
   bounds: { min: [number, number, number]; max: [number, number, number] } | null;
-  canUndo: boolean; canRedo: boolean; dirty: boolean; lastOp: string | null; journalLength: number;
+  canUndo: boolean; canRedo: boolean; dirty: boolean;
+  inPreview: boolean; inTransaction: boolean;
+  lastOp: string | null; lastTransactionLabel: string | null;
+  journalLength: number;
   attributes: { name: string; kind: string }[];
   splats: number;
 }
@@ -37,6 +45,12 @@ export interface Placement {
 }
 export interface ReadReport { polygonsTriangulated: number; facesDropped: number; elementsDropped: string[]; facePropertiesDropped: string[] }
 export interface Measure { volume: number; surfaceArea: number; centroid: [number, number, number]; closed: boolean; splats: number }
+export type Axis = "x" | "y" | "z";
+export interface ClipItem { object: string; offset: [number, number, number]; yawDeg?: number; pitchDeg?: number; rollDeg?: number; scale?: number }
+export interface Clipboard { items: ClipItem[]; pivot: [number, number, number]; step: number }
+export interface Island { faces: number[]; isWholeMesh: boolean; bounds: [[number, number, number], [number, number, number]]; overlapsOtherFaces: boolean }
+export interface TangledCluster { faces: number[]; isWholeMesh: boolean; bounds: [[number, number, number], [number, number, number]]; islands: number }
+export interface DetachedPart { instanceId: string; object: string; anchor: [number, number, number]; faces: number; islands: number; isWholeMesh: boolean }
 "#;
 
 fn to_js<T: Serialize>(v: &T) -> Result<JsValue, JsError> {
@@ -56,6 +70,12 @@ fn actor(v: JsValue) -> Result<Actor, JsError> {
     }
 }
 
+fn vec3_f64(slice: &[f64], what: &str) -> Result<[f64; 3], JsError> {
+    slice
+        .try_into()
+        .map_err(|_| JsError::new(&format!("{what} needs 3 numbers")))
+}
+
 /// Engine and op-set versions.
 #[wasm_bindgen(unchecked_return_type = "{ engine: string; ops: string }")]
 pub fn version() -> Result<JsValue, JsError> {
@@ -70,7 +90,140 @@ pub fn ops_schema() -> Result<JsValue, JsError> {
     to_js(&brush_engine::mesh::ops_schema())
 }
 
-/// A mesh being edited, with undo, redo and a journal of every change.
+/// True when `bytes` begins with the `.brush` versioned project container signature.
+#[wasm_bindgen(js_name = isProjectContainer)]
+pub fn is_project_container(bytes: &[u8]) -> bool {
+    io::is_project_container(bytes)
+}
+
+// ---- standalone selection, group transform, snapping & clipboard helpers ----
+
+#[wasm_bindgen(js_name = groupPivot, unchecked_return_type = "[number, number, number]")]
+pub fn group_pivot(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    to_js(&selection::group_pivot(&list))
+}
+
+#[wasm_bindgen(js_name = planeAngle)]
+pub fn plane_angle(
+    #[wasm_bindgen(unchecked_param_type = "Axis")] axis: JsValue,
+    v: &[f64],
+) -> Result<f64, JsError> {
+    let axis: Axis = from_js(axis, "axis")?;
+    Ok(selection::plane_angle(axis, vec3_f64(v, "v")?))
+}
+
+#[wasm_bindgen(js_name = snapTurn)]
+pub fn snap_turn(
+    raw: f64,
+    #[wasm_bindgen(unchecked_param_type = "Axis")] axis: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] start: JsValue,
+    snap: bool,
+) -> Result<f64, JsError> {
+    let axis: Axis = from_js(axis, "axis")?;
+    let start: Vec<Instance> = from_js(start, "instances")?;
+    Ok(selection::snap_turn(raw, axis, &start, snap))
+}
+
+#[wasm_bindgen(js_name = translateGroup, unchecked_return_type = "Instance[]")]
+pub fn translate_group(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+    delta: &[f64],
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    to_js(&selection::translate_group(
+        &list,
+        vec3_f64(delta, "delta")?,
+    ))
+}
+
+#[wasm_bindgen(js_name = rotateGroup, unchecked_return_type = "Instance[]")]
+pub fn rotate_group(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+    deg: f64,
+    pivot: Option<Vec<f64>>,
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    let p = match pivot {
+        Some(v) => Some(vec3_f64(&v, "pivot")?),
+        None => None,
+    };
+    to_js(&selection::rotate_group(&list, deg, p))
+}
+
+#[wasm_bindgen(js_name = rotateGroupAbout, unchecked_return_type = "Instance[]")]
+pub fn rotate_group_about(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+    #[wasm_bindgen(unchecked_param_type = "Axis")] axis: JsValue,
+    deg: f64,
+    pivot: &[f64],
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    let axis: Axis = from_js(axis, "axis")?;
+    to_js(&selection::rotate_group_about(
+        &list,
+        axis,
+        deg,
+        vec3_f64(pivot, "pivot")?,
+    ))
+}
+
+#[wasm_bindgen(js_name = scaleGroup, unchecked_return_type = "Instance[]")]
+pub fn scale_group(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+    factor: f64,
+    pivot: Option<Vec<f64>>,
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    let p = match pivot {
+        Some(v) => Some(vec3_f64(&v, "pivot")?),
+        None => None,
+    };
+    to_js(&selection::scale_group(&list, factor, p))
+}
+
+#[wasm_bindgen(js_name = dragDelta, unchecked_return_type = "[number, number, number]")]
+pub fn drag_delta(from: &[f64], to: &[f64], cell: f64, snap: bool) -> Result<JsValue, JsError> {
+    to_js(&selection::drag_delta(
+        vec3_f64(from, "from")?,
+        vec3_f64(to, "to")?,
+        cell,
+        snap,
+    ))
+}
+
+#[wasm_bindgen(js_name = copyGroup, unchecked_return_type = "Clipboard")]
+pub fn copy_group(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] list: JsValue,
+    width: f64,
+) -> Result<JsValue, JsError> {
+    let list: Vec<Instance> = from_js(list, "instances")?;
+    to_js(&selection::copy_group(&list, width))
+}
+
+#[wasm_bindgen(js_name = pasteGroup, unchecked_return_type = "Instance[]")]
+pub fn paste_group(
+    #[wasm_bindgen(unchecked_param_type = "Clipboard")] clip: JsValue,
+    at: &[f64],
+    #[wasm_bindgen(unchecked_param_type = "readonly string[]")] ids: JsValue,
+) -> Result<JsValue, JsError> {
+    let clip: Clipboard = from_js(clip, "clipboard")?;
+    let ids: Vec<String> = from_js(ids, "ids")?;
+    to_js(&selection::paste_group(&clip, vec3_f64(at, "at")?, &ids))
+}
+
+#[wasm_bindgen(js_name = freeIds, unchecked_return_type = "string[]")]
+pub fn free_ids(
+    #[wasm_bindgen(unchecked_param_type = "readonly Instance[]")] existing: JsValue,
+    count: usize,
+) -> Result<JsValue, JsError> {
+    let existing: Vec<Instance> = from_js(existing, "instances")?;
+    to_js(&selection::free_ids(&existing, count))
+}
+
+/// A mesh document being edited, with revisions, transactions, previews, undo/redo, and a journal of every change.
 ///
 /// A read-only document (`Document.openReadOnly`) is the same engine used for viewing: it renders and picks, but
 /// refuses every edit, so nothing is ever added to its journal.
@@ -93,9 +246,19 @@ impl Document {
         }
     }
 
-    /// Opens PLY (ascii or binary, any vertex properties) or OBJ bytes. A PLY without faces opens as a point cloud.
+    /// Opens `.brush` project containers, PLY (ascii or binary, any vertex properties), or OBJ bytes.
     pub fn open(bytes: &[u8]) -> Result<Document, JsError> {
-        let format = Format::sniff(bytes).ok_or_else(|| JsError::new("not a PLY or OBJ file"))?;
+        if io::is_project_container(bytes) {
+            let doc =
+                EngineDocument::open_project(bytes).map_err(|e| JsError::new(&e.to_string()))?;
+            return Ok(Document {
+                doc,
+                report: None,
+                read_only: false,
+            });
+        }
+        let format = Format::sniff(bytes)
+            .ok_or_else(|| JsError::new("not a PLY, OBJ or Brush project file"))?;
         let (mesh, report) = io::read(bytes, format).map_err(|e| JsError::new(&e.to_string()))?;
         Ok(Document {
             doc: EngineDocument::new(mesh),
@@ -123,6 +286,18 @@ impl Document {
         } else {
             Ok(())
         }
+    }
+
+    /// Monotonic document revision, incremented on every committed change (unchanged during previews).
+    pub fn revision(&self) -> f64 {
+        self.doc.revision() as f64
+    }
+
+    #[wasm_bindgen(js_name = checkRevision)]
+    pub fn check_revision(&self, expected: f64) -> Result<(), JsError> {
+        self.doc
+            .check_revision(expected as u64)
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// What the reader dropped or changed when the file was opened.
@@ -155,7 +330,7 @@ impl Document {
         to_js(&applied)
     }
 
-    /// Applies ops in order, all or nothing. A failure names the index of the op that failed.
+    /// Applies ops in order, all or nothing (one undo step per op). Prefer `applyTransaction` for user actions.
     #[wasm_bindgen(js_name = applyAll, unchecked_return_type = "Applied[]")]
     pub fn apply_all(
         &mut self,
@@ -169,6 +344,99 @@ impl Document {
             .apply_all(ops, actor(actor_)?)
             .map_err(|(i, e)| JsError::new(&format!("op {i}: {e}")))?;
         to_js(&applied)
+    }
+
+    /// Applies ops atomically as a single user action (one undo step and one transaction journal entry).
+    #[wasm_bindgen(js_name = applyTransaction, unchecked_return_type = "Applied[]")]
+    pub fn apply_transaction(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Op[]")] ops: JsValue,
+        label: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let ops: Vec<Op> = from_js(ops, "ops")?;
+        let applied = self
+            .doc
+            .apply_transaction(ops, label, actor(actor_)?)
+            .map_err(|(i, e)| JsError::new(&format!("op {i}: {e}")))?;
+        to_js(&applied)
+    }
+
+    /// Opens a streaming transaction so subsequent `apply` / `extendStroke` calls collapse into one undo step.
+    #[wasm_bindgen(js_name = beginTransaction)]
+    pub fn begin_transaction(
+        &mut self,
+        label: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<f64, JsError> {
+        self.writable()?;
+        self.doc
+            .begin_transaction(label, actor(actor_)?)
+            .map(|r| r as f64)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = commitTransaction, unchecked_return_type = "Applied | null")]
+    pub fn commit_transaction(&mut self) -> Result<JsValue, JsError> {
+        self.writable()?;
+        match self.doc.commit_transaction() {
+            Some(a) => to_js(&a),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelTransaction)]
+    pub fn cancel_transaction(&mut self) -> bool {
+        !self.read_only && self.doc.cancel_transaction()
+    }
+
+    // ---- preview sessions ----
+
+    #[wasm_bindgen(js_name = beginPreview)]
+    pub fn begin_preview(&mut self) -> Result<f64, JsError> {
+        self.writable()?;
+        self.doc
+            .begin_preview()
+            .map(|r| r as f64)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    #[wasm_bindgen(js_name = updatePreview, unchecked_return_type = "Applied[]")]
+    pub fn update_preview(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "Op[]")] ops: JsValue,
+        expected_revision: Option<f64>,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let ops: Vec<Op> = from_js(ops, "ops")?;
+        let applied = self
+            .doc
+            .update_preview(ops, expected_revision.map(|r| r as u64))
+            .map_err(|(i, e)| JsError::new(&format!("op {i}: {e}")))?;
+        to_js(&applied)
+    }
+
+    #[wasm_bindgen(js_name = commitPreview, unchecked_return_type = "Applied | null")]
+    pub fn commit_preview(
+        &mut self,
+        label: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        match self
+            .doc
+            .commit_preview(label, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?
+        {
+            Some(a) => to_js(&a),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = cancelPreview)]
+    pub fn cancel_preview(&mut self) -> bool {
+        !self.read_only && self.doc.cancel_preview()
     }
 
     /// Adds dabs to the open stroke: the same result as if they had been in the first op, and still one undo step.
@@ -217,10 +485,16 @@ impl Document {
             "faces": m.face_count(),
             "bounds": m.bounds().map(|(lo, hi)| serde_json::json!({"min": lo, "max": hi})),
             "hash": m.content_hash(),
+            "documentHash": self.doc.hash(),
+            "revision": self.doc.revision(),
+            "opsVersion": brush_engine::OPS_VERSION,
             "canUndo": self.doc.can_undo(),
             "canRedo": self.doc.can_redo(),
             "dirty": self.doc.is_dirty(),
+            "inPreview": self.doc.in_preview(),
+            "inTransaction": self.doc.in_transaction(),
             "lastOp": self.doc.last_op().map(|o| o.name()),
+            "lastTransactionLabel": self.doc.last_transaction_label(),
             "attributes": m.attributes.iter().map(|a| serde_json::json!({"name": a.name, "kind": a.kind})).collect::<Vec<_>>(),
             "splats": m.splats.len(),
             "journalLength": self.doc.journal().entries.len(),
@@ -300,16 +574,145 @@ impl Document {
         }
     }
 
-    /// The mesh as a file: "ply", "obj" or "glb". With `flattened`, placed objects are copied in (downloads, other
-    /// tools); without, it is the document's own mesh, which is what is saved beside the scene.
+    /// Packages the entire project (surface, linked objects, scene, journal, revision, metadata, features) as `.brush` bytes.
+    #[wasm_bindgen(js_name = saveProject)]
+    pub fn save_project(&self) -> Vec<u8> {
+        self.doc.save_project()
+    }
+
+    /// Exports `"brush"` (versioned project container) or a mesh interchange format (`"ply"`, `"obj"`, `"glb"`).
+    /// With `flattened`, placed objects are copied into mesh exports.
     pub fn export(&self, format: &str, flattened: Option<bool>) -> Result<Vec<u8>, JsError> {
+        if format.eq_ignore_ascii_case("brush") {
+            return Ok(self.doc.save_project());
+        }
         let f = Format::from_extension(format)
-            .ok_or_else(|| JsError::new("format must be ply, obj or glb"))?;
+            .ok_or_else(|| JsError::new("format must be brush, ply, obj or glb"))?;
         Ok(if flattened.unwrap_or(false) {
             io::write(&self.doc.flattened(), f)
         } else {
             io::write(self.doc.mesh(), f)
         })
+    }
+
+    /// Exports one loaded object mesh (e.g. a detached or combined part) as `"ply"`, `"obj"` or `"glb"`.
+    #[wasm_bindgen(js_name = exportObject)]
+    pub fn export_object(&self, object: &str, format: Option<String>) -> Result<Vec<u8>, JsError> {
+        let mesh = self
+            .doc
+            .object(object)
+            .ok_or_else(|| JsError::new(&format!("object {object} is not loaded")))?;
+        let fmt_str = format.as_deref().unwrap_or("ply");
+        let f = Format::from_extension(fmt_str)
+            .ok_or_else(|| JsError::new("format must be ply, obj or glb"))?;
+        Ok(io::write(mesh, f))
+    }
+
+    pub fn metadata(&self) -> Result<JsValue, JsError> {
+        to_js(self.doc.metadata())
+    }
+
+    #[wasm_bindgen(js_name = setMetadata)]
+    pub fn set_metadata(&mut self, value: JsValue) -> Result<(), JsError> {
+        self.writable()?;
+        let v: serde_json::Value = from_js(value, "metadata")?;
+        self.doc.set_metadata(v);
+        Ok(())
+    }
+
+    pub fn features(&self) -> Result<JsValue, JsError> {
+        to_js(&self.doc.features())
+    }
+
+    #[wasm_bindgen(js_name = setFeatures)]
+    pub fn set_features(&mut self, list: JsValue) -> Result<(), JsError> {
+        self.writable()?;
+        let v: Vec<serde_json::Value> = from_js(list, "features")?;
+        self.doc.set_features(v);
+        Ok(())
+    }
+
+    // ---- island inspection & detach / join workflows ----
+
+    #[wasm_bindgen(js_name = connectedComponent, unchecked_return_type = "Island | null")]
+    pub fn connected_component(&self, start_face: u32) -> Result<JsValue, JsError> {
+        match self.doc.mesh().connected_component(start_face) {
+            Some(c) => to_js(&c),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = tangledCluster, unchecked_return_type = "TangledCluster | null")]
+    pub fn tangled_cluster(&self, start_face: u32) -> Result<JsValue, JsError> {
+        match self.doc.mesh().tangled_cluster(start_face) {
+            Some(c) => to_js(&c),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    #[wasm_bindgen(js_name = deleteIsland, unchecked_return_type = "Applied")]
+    pub fn delete_island(
+        &mut self,
+        start_face: u32,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let applied = self
+            .doc
+            .delete_island(start_face, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&applied)
+    }
+
+    #[wasm_bindgen(js_name = detachIsland, unchecked_return_type = "DetachedPart")]
+    pub fn detach_island(
+        &mut self,
+        start_face: u32,
+        tangled: bool,
+        object_key: String,
+        instance_id: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let part = self
+            .doc
+            .detach_island(start_face, tangled, object_key, instance_id, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&part)
+    }
+
+    #[wasm_bindgen(js_name = detachBox, unchecked_return_type = "DetachedPart")]
+    pub fn detach_box(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "BoxRegion")] region: JsValue,
+        object_key: String,
+        instance_id: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let region: BoxRegion = from_js(region, "box")?;
+        let part = self
+            .doc
+            .detach_box(region, object_key, instance_id, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&part)
+    }
+
+    #[wasm_bindgen(js_name = combineInstances, unchecked_return_type = "DetachedPart")]
+    pub fn combine_instances(
+        &mut self,
+        #[wasm_bindgen(unchecked_param_type = "readonly string[]")] ids: JsValue,
+        object_key: String,
+        instance_id: Option<String>,
+        #[wasm_bindgen(unchecked_param_type = "Actor | undefined")] actor_: JsValue,
+    ) -> Result<JsValue, JsError> {
+        self.writable()?;
+        let ids: Vec<String> = from_js(ids, "ids")?;
+        let part = self
+            .doc
+            .combine_instances(&ids, object_key, instance_id, actor(actor_)?)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        to_js(&part)
     }
 
     // ---- scene: linked instances of other objects ----
@@ -344,6 +747,12 @@ impl Document {
     #[wasm_bindgen(js_name = hasObject)]
     pub fn has_object(&self, object: &str) -> bool {
         self.doc.object(object).is_some()
+    }
+
+    /// Keys of every object mesh currently loaded in this document.
+    #[wasm_bindgen(js_name = loadedObjects)]
+    pub fn loaded_objects(&self) -> Vec<String> {
+        self.doc.loaded_objects()
     }
 
     /// Objects the scene points at whose meshes have not been supplied.

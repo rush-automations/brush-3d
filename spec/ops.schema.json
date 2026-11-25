@@ -119,7 +119,7 @@
       ]
     }
   },
-  "$id": "https://brush-engine.dev/schema/ops/0.4.0.json",
+  "$id": "https://brush-engine.dev/schema/ops/0.5.0.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "description": "One edit.",
   "oneOf": [
@@ -142,6 +142,33 @@
       "required": [
         "op",
         "box"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "description": "Delete the listed faces by index (or with `invert` keep only the listed faces). Orphaned vertices are dropped\nand surviving vertices/faces keep their relative order. Count: faces removed.",
+      "properties": {
+        "faces": {
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "invert": {
+          "default": false,
+          "type": "boolean"
+        },
+        "op": {
+          "const": "removeFaces",
+          "type": "string"
+        }
+      },
+      "required": [
+        "op",
+        "faces"
       ],
       "type": "object"
     },
@@ -1401,5 +1428,5 @@
     }
   ],
   "title": "Brush engine operation",
-  "x-ops-version": "0.4.0"
+  "x-ops-version": "0.5.0"
 }
