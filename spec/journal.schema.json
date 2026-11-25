@@ -144,6 +144,33 @@
         },
         {
           "additionalProperties": false,
+          "description": "Delete the listed faces by index (or with `invert` keep only the listed faces). Orphaned vertices are dropped\nand surviving vertices/faces keep their relative order. Count: faces removed.",
+          "properties": {
+            "faces": {
+              "items": {
+                "format": "uint32",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            "invert": {
+              "default": false,
+              "type": "boolean"
+            },
+            "op": {
+              "const": "removeFaces",
+              "type": "string"
+            }
+          },
+          "required": [
+            "op",
+            "faces"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "description": "Cut the box out of the surface. Triangles crossing its boundary are split along it, so the hole has exactly\nthe box's shape. Count: triangles cut or removed.",
           "properties": {
             "box": {
@@ -1457,7 +1484,7 @@
   "description": "One line of the journal.",
   "oneOf": [
     {
-      "description": "An op was applied and changed the mesh.",
+      "description": "An op was applied and changed the document.",
       "properties": {
         "actor": {
           "$ref": "#/$defs/Actor"
@@ -1467,11 +1494,17 @@
           "type": "string"
         },
         "hash": {
-          "description": "Content hash of the mesh after the op.",
+          "description": "Content hash of the document after the op.",
           "type": "string"
         },
         "op": {
           "$ref": "#/$defs/Op"
+        },
+        "opsVersion": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "outcome": {
           "$ref": "#/$defs/OpOutcome"
@@ -1486,6 +1519,53 @@
         "event",
         "seq",
         "op",
+        "outcome",
+        "hash"
+      ],
+      "type": "object"
+    },
+    {
+      "description": "Several ops committed together as one atomic user action (one undo step).",
+      "properties": {
+        "actor": {
+          "$ref": "#/$defs/Actor"
+        },
+        "event": {
+          "const": "transaction",
+          "type": "string"
+        },
+        "hash": {
+          "description": "Content hash of the document after the transaction.",
+          "type": "string"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ops": {
+          "items": {
+            "$ref": "#/$defs/Op"
+          },
+          "type": "array"
+        },
+        "opsVersion": {
+          "type": "string"
+        },
+        "outcome": {
+          "$ref": "#/$defs/OpOutcome"
+        },
+        "seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "event",
+        "seq",
+        "ops",
         "outcome",
         "hash"
       ],

@@ -19,6 +19,7 @@
 
 pub mod bvh;
 pub mod detail;
+pub mod islands;
 pub mod kernel;
 pub mod math;
 pub mod mesh;
@@ -30,6 +31,7 @@ pub mod splat;
 pub mod topo;
 
 pub use bvh::{Bvh, Hit};
+pub use islands::{Island, TangledCluster, TopologyKind, TopologyRemap};
 pub use mesh::{Attribute, Mesh, MeshError, ScalarKind};
 pub use op::{Measure, Op, OpError, OpOutcome, OPS_VERSION};
 pub use region::BoxRegion;

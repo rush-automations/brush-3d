@@ -213,8 +213,8 @@ impl Mesh {
         i
     }
 
-    /// Keeps only the vertices a face still uses, renumbering faces. Survivors keep their relative order.
-    pub(crate) fn compact(&mut self) {
+    /// Keeps only the vertices a face still uses, renumbering faces and returning `old -> Option<new>` vertex indices.
+    pub(crate) fn compact_with_map(&mut self) -> Vec<Option<u32>> {
         let v = self.vertex_count();
         const NONE: u32 = u32::MAX;
         let mut map = vec![NONE; v];
@@ -244,22 +244,39 @@ impl Mesh {
         for a in &mut self.attributes {
             a.values.truncate(next);
         }
+        map.into_iter().map(|m| (m != NONE).then_some(m)).collect()
     }
 
-    /// Drops faces for which `drop` is true, keeping the order of the rest.
-    pub(crate) fn retain_faces(&mut self, mut keep: impl FnMut(usize) -> bool) {
+    /// Keeps only the vertices a face still uses, renumbering faces. Survivors keep their relative order.
+    pub(crate) fn compact(&mut self) {
+        let _ = self.compact_with_map();
+    }
+
+    /// Drops faces for which `keep` is false, keeping the order of the rest and returning `old -> Option<new>`.
+    pub(crate) fn retain_faces_with_map(
+        &mut self,
+        mut keep: impl FnMut(usize) -> bool,
+    ) -> Vec<Option<u32>> {
         let f = self.face_count();
+        let mut map = vec![None; f];
         let mut w = 0;
         for t in 0..f {
             if !keep(t) {
                 continue;
             }
+            map[t] = Some(w as u32);
             if w != t {
                 self.indices.copy_within(t * 3..t * 3 + 3, w * 3);
             }
             w += 1;
         }
         self.indices.truncate(w * 3);
+        map
+    }
+
+    /// Drops faces for which `keep` is false, keeping the order of the rest.
+    pub(crate) fn retain_faces(&mut self, keep: impl FnMut(usize) -> bool) {
+        let _ = self.retain_faces_with_map(keep);
     }
 
     /// A content hash over positions, colours, faces, attributes and splats: equal meshes hash equal on every

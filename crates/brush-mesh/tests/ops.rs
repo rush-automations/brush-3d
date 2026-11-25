@@ -833,3 +833,90 @@ fn measure_reports_volume_area_and_closure() {
     assert_eq!(ms.volume, 0.0);
     assert!((ms.surface_area - 4.0).abs() < 1e-4);
 }
+
+#[test]
+fn islands_cluster_extraction_remove_faces_and_topology_remaps() {
+    use brush_mesh::TopologyKind;
+
+    let mut m = Mesh::default();
+    run(
+        &mut m,
+        json!({"op":"addBox","box":{"center":[0,0.5,0],"size":[1,1,1]},"color":[200,50,50]}),
+    );
+    let first_faces = m.face_count();
+    let (_, append_remap) = op(
+        json!({"op":"addBox","box":{"center":[0.2,0.5,0.2],"size":[1,1,1]},"color":[50,200,50]}),
+    )
+    .apply_with_remap(&mut m, Context::default())
+    .unwrap();
+    assert_eq!(append_remap.kind, TopologyKind::Appended);
+    assert_eq!(append_remap.map_face(0), Some(0));
+
+    // A third box stands completely apart.
+    run(
+        &mut m,
+        json!({"op":"addBox","box":{"center":[5,0.5,0],"size":[1,1,1]},"color":[50,50,200]}),
+    );
+    let n = m.vertex_count();
+    let per_box = n / 3;
+    let ids: Vec<f64> = (0..n).map(|i| (i / per_box + 1) as f64).collect();
+    m.set_attribute("part_id", ScalarKind::U16, ids).unwrap();
+
+    // First box stays a single connected island even if vertices are duplicated along creases.
+    let split = Mesh::new(
+        vec![
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, // face 0
+            0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 1.0,
+            0.0, // face 1 shares edge via position only
+        ],
+        vec![200; 18],
+        vec![0, 1, 2, 3, 4, 5],
+    )
+    .unwrap();
+    assert!(split.connected_component(0).unwrap().is_whole_mesh);
+
+    let isl0 = m.connected_component(0).unwrap();
+    assert_eq!(isl0.faces.len(), first_faces);
+    assert!(!isl0.is_whole_mesh);
+    assert!(isl0.overlaps_other_faces);
+
+    // Tangled cluster merges the two overlapping boxes (2 islands) and leaves the distant third box out.
+    let cluster = m.tangled_cluster(0).unwrap();
+    assert_eq!(cluster.islands, 2);
+    assert_eq!(cluster.faces.len(), first_faces * 2);
+    assert!(!cluster.is_whole_mesh);
+
+    let isolated = m.connected_component((first_faces * 2) as u32).unwrap();
+    assert_eq!(isolated.faces.len(), 12);
+    assert!(!isolated.overlaps_other_faces);
+
+    // Extracting the first island preserves colours and integer attributes.
+    let extracted = m.extract_faces(&isl0.faces).unwrap();
+    extracted.validate().unwrap();
+    assert_eq!(extracted.face_count(), 12);
+    assert_eq!(extracted.attribute("part_id").unwrap().values[0], 1.0);
+
+    // Out-of-range face index is refused before mutating the mesh.
+    let hash_before = m.content_hash();
+    assert!(op(json!({"op":"removeFaces","faces":[0, 9999]}))
+        .apply(&mut m, Context::default())
+        .is_err());
+    assert_eq!(m.content_hash(), hash_before);
+
+    // Removing the first interlocking island leaves the other two boxes intact and reports exact face remaps.
+    let (out, remap) = op(json!({"op":"removeFaces","faces": isl0.faces}))
+        .apply_with_remap(&mut m, Context::default())
+        .unwrap();
+    assert_eq!(out.count, 12);
+    assert_eq!(m.face_count(), 24);
+    assert_eq!(remap.kind, TopologyKind::Remapped);
+    assert_eq!(remap.map_face(0), None);
+    assert_eq!(remap.map_face(12), Some(0));
+    m.validate().unwrap();
+    assert!(m
+        .attribute("part_id")
+        .unwrap()
+        .values
+        .iter()
+        .all(|&v| v == 2.0 || v == 3.0));
+}

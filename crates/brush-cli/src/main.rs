@@ -186,7 +186,18 @@ fn info(mesh: &Mesh) -> Value {
 }
 
 fn open_document(input: &Path, scene: Option<&Path>, objects: Option<&Path>) -> Res<Document> {
-    let mut doc = Document::new(load(input)?);
+    let bytes = std::fs::read(input).map_err(|e| format!("{}: {e}", input.display()))?;
+    let mut doc = if io::is_project_container(&bytes) {
+        Document::open_project(&bytes).map_err(|e| format!("{}: {e}", input.display()))?
+    } else {
+        let format = Format::sniff(&bytes).map_or_else(|| format_of(input), Ok)?;
+        let (mesh, report) =
+            io::read(&bytes, format).map_err(|e| format!("{}: {e}", input.display()))?;
+        if report != io::ReadReport::default() {
+            eprintln!("{}: {report:?}", input.display());
+        }
+        Document::new(mesh)
+    };
     if let Some(path) = scene {
         let scene: Scene =
             serde_json::from_str(&read_text(path)?).map_err(|e| format!("scene: {e}"))?;
@@ -217,8 +228,24 @@ fn run(cli: Cli) -> Res<Value> {
             Ok(result)
         }
         Cmd::Convert { input, output } => {
-            let m = load(&input)?;
-            save(&m, &output)?;
+            let bytes = std::fs::read(&input).map_err(|e| format!("{}: {e}", input.display()))?;
+            let m = if io::is_project_container(&bytes) {
+                Document::open_project(&bytes)
+                    .map_err(|e| format!("{}: {e}", input.display()))?
+                    .flattened()
+            } else {
+                load(&input)?
+            };
+            if output
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("brush"))
+            {
+                let doc = Document::new(m.clone());
+                std::fs::write(&output, doc.save_project())
+                    .map_err(|e| format!("{}: {e}", output.display()))?;
+            } else {
+                save(&m, &output)?;
+            }
             Ok(info(&m))
         }
         Cmd::Apply {
@@ -238,9 +265,17 @@ fn run(cli: Cli) -> Res<Value> {
                 kind: model.then_some(ActorKind::Model),
             };
             let applied = doc
-                .apply_all(ops, actor)
+                .apply_transaction(ops, None, actor)
                 .map_err(|(i, e)| format!("op {}: {e}", i + 1))?;
-            save(doc.mesh(), &output)?;
+            if output
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("brush"))
+            {
+                std::fs::write(&output, doc.save_project())
+                    .map_err(|e| format!("{}: {e}", output.display()))?;
+            } else {
+                save(doc.mesh(), &output)?;
+            }
             if let Some(j) = journal {
                 std::fs::write(&j, doc.journal().to_jsonl())
                     .map_err(|e| format!("{}: {e}", j.display()))?;

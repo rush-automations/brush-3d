@@ -3,7 +3,10 @@
 import { expect, test } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Document, initSync, opsSchema, version, type Op } from '../pkg/brush_wasm.js';
+import {
+  Document, copyGroup, dragDelta, freeIds, groupPivot, initSync, isProjectContainer, opsSchema, pasteGroup,
+  rotateGroupAbout, scaleGroup, snapTurn, translateGroup, version, type Op,
+} from '../pkg/brush_wasm.js';
 
 initSync({ module: readFileSync(join(import.meta.dir, '../pkg/brush_wasm_bg.wasm')) });
 
@@ -68,8 +71,8 @@ test('errors are thrown and leave the mesh alone', () => {
 });
 
 test('the schema and versions are exposed', () => {
-  expect(version().ops).toBe('0.4.0');
-  expect((opsSchema() as { oneOf: unknown[] }).oneOf).toHaveLength(29);
+  expect(version().ops).toBe('0.5.0');
+  expect((opsSchema() as { oneOf: unknown[] }).oneOf).toHaveLength(30);
 });
 
 test('a read-only document views but never edits or journals', () => {
@@ -213,3 +216,62 @@ test('a read-only document still shows its scene', () => {
   expect(doc.instanceTransform('a')).toBeDefined();
   expect(() => doc.apply({ op: 'removeObject', id: 'a' }, undefined)).toThrow(/read-only/);
 });
+
+test('transactions, preview sessions, selection math, detach/join, and .brush project persistence work across WASM', () => {
+  const doc = new Document();
+  doc.applyTransaction([
+    { op: 'addBox', box: { center: [0, 0.5, 0], size: [1, 1, 1] }, color: [200, 60, 60] },
+    { op: 'addBox', box: { center: [0.25, 0.5, 0.25], size: [1, 1, 1] }, color: [60, 200, 60] },
+    { op: 'addBox', box: { center: [4, 0.5, 0], size: [1, 1, 1] }, color: [60, 60, 200] },
+  ], 'seedScene', { id: 'user:1', kind: 'person' });
+  expect(doc.revision()).toBe(1);
+  expect(doc.state().lastTransactionLabel).toBe('seedScene');
+
+  // Interlocking island detaches cleanly in 1 undo step without losing history.
+  const part1 = doc.detachIsland(0, false, 'local:p1', undefined, undefined);
+  expect(part1.instanceId).toBe('o1');
+  expect(doc.state().faces).toBe(24);
+  expect(doc.exportObject('local:p1', 'ply').length).toBeGreaterThan(0);
+
+  // Preview session moves o1 without touching revision or undo stack, then commits as 1 undo step.
+  const baseRev = doc.beginPreview();
+  const moved = translateGroup(doc.scene().instances, [2, 0, -1]);
+  doc.updatePreview(
+    moved.map((i) => ({ op: 'moveObject' as const, id: i.id, position: i.position, yawDeg: i.yawDeg ?? 0, scale: i.scale ?? 1 })),
+    baseRev,
+  );
+  expect(doc.state().inPreview).toBe(true);
+  expect(doc.revision()).toBe(baseRev);
+  expect(doc.scene().instances[0].position[0]).toBeCloseTo(2, 5);
+  doc.commitPreview('moveSelection', undefined);
+  expect(doc.state().inPreview).toBe(false);
+  expect(doc.revision()).toBe(baseRev + 1);
+
+  // Detach second box and combine o1 + o2.
+  const part2 = doc.detachBox({ center: [4, 0.5, 0], size: [2, 2, 2], yawDeg: 0 }, 'local:p2', undefined, undefined);
+  const joined = doc.combineInstances([part1.instanceId, part2.instanceId], 'local:joined', undefined, undefined);
+  expect(joined.faces).toBe(24);
+  expect(doc.scene().instances).toHaveLength(1);
+
+  // Selection helpers work deterministically over WASM.
+  expect(groupPivot(doc.scene().instances)).toHaveLength(3);
+  expect(snapTurn(86, 'y', doc.scene().instances, true)).toBe(90);
+  expect(rotateGroupAbout(doc.scene().instances, 'x', 90, [0, 0, 0])[0].pitchDeg).toBe(90);
+  expect(scaleGroup(doc.scene().instances, 2)[0].scale).toBe(2);
+  expect(dragDelta([0, 0, 0], [0.49, 0, 0.51], 0.5, true)).toEqual([0.5, 0, 0.5]);
+  const clip = copyGroup(doc.scene().instances, 2);
+  expect(pasteGroup(clip, [5, 0, 0], freeIds(doc.scene().instances, 1))).toHaveLength(1);
+
+  // Save and reopen as a .brush project container.
+  doc.setMetadata({ title: 'WASM Project' });
+  doc.setFeatures([{ kind: 'grid', cell: 0.5 }]);
+  const bytes = doc.saveProject();
+  expect(isProjectContainer(bytes)).toBe(true);
+  const reopened = Document.open(bytes);
+  expect(reopened.state().documentHash).toBe(doc.state().documentHash);
+  expect(reopened.revision()).toBe(doc.revision());
+  expect(reopened.loadedObjects()).toContain('local:joined');
+  expect((reopened.metadata() as { title: string }).title).toBe('WASM Project');
+  expect(reopened.features()).toHaveLength(1);
+});
+

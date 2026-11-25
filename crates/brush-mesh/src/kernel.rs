@@ -12,8 +12,13 @@ pub const MAX_FACES: usize = 2_000_000;
 // ---- removing ----
 
 impl Mesh {
-    /// Deletes faces whose centroid is inside the box (or outside, with `invert`). Returns faces removed.
-    pub fn remove_box(&mut self, a: Area, invert: bool) -> usize {
+    /// Deletes faces whose centroid is inside the box (or outside, with `invert`), returning `(removed, remap)`.
+    pub fn remove_box_with_remap(
+        &mut self,
+        a: Area,
+        invert: bool,
+    ) -> (usize, crate::islands::TopologyRemap) {
+        let v0 = self.vertex_count();
         let f = self.face_count();
         let keep: Vec<bool> = (0..f)
             .map(|t| {
@@ -29,12 +34,28 @@ impl Mesh {
                 inside == invert
             })
             .collect();
-        self.retain_faces(|t| keep[t]);
+        let face_map = self.retain_faces_with_map(|t| keep[t]);
         let removed = f - self.face_count();
-        self.compact();
+        let vertex_map = self.compact_with_map();
         // Paint in the removed region goes with it.
         self.splats.retain(|_, p| a.contains(p) == invert);
-        removed
+        let remap = if removed == 0 {
+            crate::islands::TopologyRemap::preserved(v0, f)
+        } else {
+            crate::islands::TopologyRemap {
+                kind: crate::islands::TopologyKind::Remapped,
+                vertices_before: v0 as u32,
+                faces_before: f as u32,
+                vertex_map,
+                face_map,
+            }
+        };
+        (removed, remap)
+    }
+
+    /// Deletes faces whose centroid is inside the box (or outside, with `invert`). Returns faces removed.
+    pub fn remove_box(&mut self, a: Area, invert: bool) -> usize {
+        self.remove_box_with_remap(a, invert).0
     }
 
     /// Cuts the box out of the surface. Triangles crossing the box boundary are split along it and only the part

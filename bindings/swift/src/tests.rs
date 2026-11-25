@@ -270,7 +270,7 @@ fn bad_input_is_an_error_not_a_crash() {
         brush_document_free(ptr::null_mut());
         brush_string_free(ptr::null_mut());
         let v = take(brush_version());
-        assert!(v.contains(r#""ops":"0.4.0""#), "{v}");
+        assert!(v.contains(r#""ops":"0.5.0""#), "{v}");
         let scratch = brush_document_new();
         apply(
             scratch,
