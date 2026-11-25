@@ -1,0 +1,8 @@
+# Keep generated schemas, TypeScript definitions, conformance fixtures, and shell scripts LF on every OS.
+*.sh text eol=lf
+spec/** text eol=lf
+conformance/** text eol=lf
+bindings/wasm/types/** text eol=lf
+*.ply binary
+*.glb binary
+*.png binary
