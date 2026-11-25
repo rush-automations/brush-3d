@@ -11,7 +11,10 @@
     "isolatedModules": true,
     "noEmit": true,
     "paths": {
-      "brush-wasm": ["../../bindings/wasm/pkg/brush_wasm"]
+      "brush-wasm": ["../../bindings/wasm/pkg/brush_wasm"],
+      "@brush/web-editor": ["../../packages/web-editor/src/index.ts"],
+      "three": ["./node_modules/@types/three"],
+      "three/*": ["./node_modules/@types/three/*"]
     }
   },
   "include": ["src", "vite.config.ts"]

@@ -14,10 +14,11 @@
       <section>
         <h2>File</h2>
         <div class="row">
-          <label class="button">Open PLY / OBJ<input type="file" id="file" accept=".ply,.obj" hidden /></label>
+          <label class="button">Open PLY / OBJ / BRUSH<input type="file" id="file" accept=".ply,.obj,.brush" hidden /></label>
           <button id="sample">Sample</button>
         </div>
         <div class="row">
+          <button data-export="brush">.brush</button>
           <button data-export="ply">PLY</button>
           <button data-export="glb">GLB</button>
           <button data-export="obj">OBJ</button>
@@ -73,12 +74,13 @@
         <div class="row">
           <label class="check"><input type="checkbox" id="flat" /> Flat</label>
           <label class="check"><input type="checkbox" id="wire" /> Wireframe</label>
+          <label class="check"><input type="checkbox" id="grid" /> Grid</label>
         </div>
       </section>
     </aside>
 
     <main>
-      <canvas id="view"></canvas>
+      <div id="view" class="viewport-host"></div>
       <div class="status" id="status"></div>
     </main>
 

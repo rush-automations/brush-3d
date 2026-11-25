@@ -1,8 +1,8 @@
-// Wires the engine, the viewer and the panels together. Every change to the mesh goes through an engine op, so
-// everything on screen is also in the journal.
+// Wires the engine, the shared @brush/web-editor viewport, and the panels together. Every change to the mesh goes
+// through an engine op, so everything on screen is also in the journal.
 import init, { Document, opsSchema, version, type Applied, type Brush, type Op } from 'brush-wasm';
+import { CameraFlightController, Viewport, syncDocumentToViewport, type Vec3 } from '@brush/web-editor';
 import { SAMPLE_SCENE } from './sample';
-import { Viewer, type Vec3 } from './viewer';
 import './style.css';
 
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -11,19 +11,28 @@ await init();
 const v = version();
 $('version').textContent = `engine ${v.engine}, ops ${v.ops}`;
 
-const viewer = new Viewer($<HTMLCanvasElement>('view'));
+const viewer = new Viewport($('view'));
+viewer.setLeftButtonFree(true);
+const flight = new CameraFlightController(viewer);
+flight.start();
 const person = { id: 'demo-user', kind: 'person' as const };
 let doc = new Document();
+const syncedObjects = new Set<string>();
+let sceneSig = '';
 
 // ---- state shown on screen ----
 
 let brush: Brush = 'draw';
 
 function refresh(frame = false) {
-  viewer.setMesh({ positions: doc.positions(), colors: doc.colors(), indices: doc.indices(), normals: doc.normals() });
-  viewer.setSplats(doc.splats(), doc.splatColors());
+  const synced = syncDocumentToViewport(doc, viewer, {
+    previousSignature: sceneSig,
+    syncObjects: true,
+    syncedObjectKeys: syncedObjects,
+  });
+  sceneSig = synced.signature;
   const s = doc.state();
-  if (frame) viewer.frame(s.bounds);
+  if (frame) viewer.frame();
   const m = doc.measure();
   const stats: [string, string][] = [
     ['Vertices', s.vertices.toLocaleString()],
@@ -77,6 +86,8 @@ function run(ops: Op | Op[], actor: { id: string; kind: 'person' | 'app' | 'mode
 function load(next: Document, label: string) {
   doc.free();
   doc = next;
+  syncedObjects.clear();
+  sceneSig = '';
   refresh(true);
   status(label);
 }
@@ -87,7 +98,8 @@ $<HTMLInputElement>('file').addEventListener('change', async (ev) => {
   const file = (ev.target as HTMLInputElement).files?.[0];
   if (!file) return;
   try {
-    const next = Document.open(new Uint8Array(await file.arrayBuffer()));
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const next = Document.open(bytes);
     load(next, `Opened ${file.name}`);
   } catch (e) {
     status(`Could not open ${file.name}: ${e instanceof Error ? e.message : e}`);
@@ -104,7 +116,8 @@ $('sample').addEventListener('click', () => {
 for (const b of document.querySelectorAll<HTMLButtonElement>('[data-export]')) {
   b.addEventListener('click', () => {
     const format = b.dataset.export!;
-    const blob = new Blob([doc.export(format) as BlobPart], { type: 'application/octet-stream' });
+    const bytes = format === 'brush' ? doc.saveProject() : doc.export(format);
+    const blob = new Blob([bytes as BlobPart], { type: 'application/octet-stream' });
     const a = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `mesh.${format}` });
     a.click();
     URL.revokeObjectURL(a.href);
@@ -188,7 +201,7 @@ $('clearSplats').addEventListener('click', () => {
   run({ op: 'splatErase', dabs: [{ center: c }], radius: span * 2 || 1e6 });
 });
 
-const canvas = $<HTMLCanvasElement>('view');
+const canvas = viewer.canvas;
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
 let stroke: { last: Vec3; seed: number; dabs: number } | null = null;
@@ -272,15 +285,26 @@ for (const [label, make] of MESH_OPS) {
 
 $<HTMLInputElement>('flat').addEventListener('change', (e) => viewer.setFlatShading((e.target as HTMLInputElement).checked));
 $<HTMLInputElement>('wire').addEventListener('change', (e) => viewer.setWireframe((e.target as HTMLInputElement).checked));
+$<HTMLInputElement>('grid').addEventListener('change', (e) =>
+  viewer.setGrid({ visible: (e.target as HTMLInputElement).checked, y: 0, cell: 0.5, extent: 16 }),
+);
 
 $('undo').addEventListener('click', () => doc.undo() && refresh());
 $('redo').addEventListener('click', () => doc.redo() && refresh());
 $('revert').addEventListener('click', () => doc.revert() && refresh());
 window.addEventListener('keydown', (e) => {
-  if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z' || e.target instanceof HTMLTextAreaElement) return;
-  e.preventDefault();
-  if (e.shiftKey ? doc.redo() : doc.undo()) refresh();
+  if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    if (e.shiftKey ? doc.redo() : doc.undo()) refresh();
+    return;
+  }
+  if (!e.ctrlKey && !e.metaKey && !e.altKey && flight.keyDown(e.key)) {
+    if (e.key === ' ') e.preventDefault();
+  }
 });
+window.addEventListener('keyup', (e) => flight.keyUp(e.key));
+window.addEventListener('blur', () => flight.clear());
 
 const consoleBox = $<HTMLTextAreaElement>('console');
 consoleBox.value = JSON.stringify({ op: 'carveBox', box: { center: [0, 1.2, 0], size: [1, 0.4, 1], yawDeg: 30 } }, null, 2);
