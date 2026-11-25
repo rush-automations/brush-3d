@@ -24,12 +24,14 @@ pub use brush_mesh::{
 };
 pub use brush_render as render;
 
+pub mod capabilities;
 pub mod edit;
 pub mod place;
 pub mod precision;
 pub mod scene;
 pub mod selection;
 
+pub use capabilities::{capabilities, Capabilities, FeatureFlags, FormatCapabilities};
 pub use edit::DetachedPart;
 pub use place::{Piece, Placement};
 pub use precision::{
