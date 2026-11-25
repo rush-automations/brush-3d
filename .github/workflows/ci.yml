@@ -40,6 +40,9 @@ jobs:
       - name: Conformance in wasm
         working-directory: bindings/wasm
         run: bun test
+      - name: Web editor kit tests
+        working-directory: packages/web-editor
+        run: bun test
       - name: Demo builds
         working-directory: apps/demo
         run: bun install && bun run build

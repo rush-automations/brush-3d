@@ -1,0 +1,16 @@
+{
+  "name": "@brush/web-editor",
+  "version": "0.1.0",
+  "description": "Reusable Three.js viewport, gizmos, overlays, camera flight, and selection controllers for Brush 3D editors.",
+  "license": "MIT OR Apache-2.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "peerDependencies": {
+    "three": "^0.186.0"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}
