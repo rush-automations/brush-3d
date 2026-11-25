@@ -26,11 +26,17 @@ pub use brush_render as render;
 
 pub mod edit;
 pub mod place;
+pub mod precision;
 pub mod scene;
 pub mod selection;
 
 pub use edit::DetachedPart;
 pub use place::{Piece, Placement};
+pub use precision::{
+    AlignAxis, AlignMode, ConstraintConflict, ConstraintKind, ConstraintRecord,
+    DistanceMeasurement, FeatureKind, FeatureRecord, FeatureSpec, FeatureStatus, PrecisionState,
+    SolveReport, Workplane,
+};
 pub use scene::{Instance, Pick, Scene};
 pub use selection::{Axis, ClipItem, Clipboard};
 

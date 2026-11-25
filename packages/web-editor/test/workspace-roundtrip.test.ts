@@ -12,6 +12,7 @@ import {
 } from '../../../bindings/wasm/pkg/brush_wasm.js';
 import {
   FREEFORM_MESH_PROFILE,
+  PRECISION_PROFILE,
   SIMPLE_BUILDER_PROFILE,
   WorkspaceSession,
   composePolicy,
@@ -198,5 +199,37 @@ describe('Phase D: two mental models on one shared document', () => {
     expect(reopenedDoc.state().faces).toBeGreaterThan(freeformState.faces);
 
     reopenedDoc.free();
+  });
+
+  test('Precision CAD dimensioned feature -> .brush -> Freeform bake & sculpt round-trip', () => {
+    const doc = new Document();
+    const session = new WorkspaceSession(doc, PRECISION_PROFILE);
+    expect(session.getPolicy().placement.cell).toBe(0.1);
+
+    doc.addFeature(
+      {
+        id: 'beam',
+        name: 'Beam',
+        kind: { kind: 'box', center: [0, 0, 0], width: 2.0, height: 0.4, depth: 0.4, color: [180, 180, 190] },
+      },
+      { id: 'cad-user', kind: 'person' },
+    );
+    const bytes = session.saveProject();
+    doc.free();
+
+    // Open in Freeform Mesh, edit a dimension, then bake and sculpt it.
+    const freeDoc = Document.open(bytes);
+    const freeSession = new WorkspaceSession(freeDoc, FREEFORM_MESH_PROFILE);
+    expect(freeSession.getProfile().id).toBe('freeform-mesh');
+    const update = freeDoc.updateFeature(
+      'beam',
+      { kind: 'box', center: [0, 0, 0], width: 3.0, height: 0.4, depth: 0.4, color: [180, 180, 190] },
+      { id: 'cad-user', kind: 'person' },
+    );
+    expect(update.conflicts).toHaveLength(0);
+    const baked = freeDoc.bakeFeature('beam', { id: 'sculptor', kind: 'person' });
+    expect(baked.status.state).toBe('baked');
+    expect(freeDoc.state().faces).toBeGreaterThan(0);
+    freeDoc.free();
   });
 });

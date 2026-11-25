@@ -148,9 +148,48 @@ export const FREEFORM_MESH_PROFILE: WorkspaceProfile = {
   },
 };
 
+/**
+ * Precision construction mental model:
+ * fine metric grid, exact dimensions, workplanes, alignment, editable features, and persistent constraints.
+ */
+export const PRECISION_PROFILE: WorkspaceProfile = {
+  id: 'precision',
+  label: 'Precision CAD',
+  description: 'Workplanes, exact numeric dimensions, alignment, editable features, and persistent constraints.',
+  defaultMode: 'select',
+  policy: {
+    placement: {
+      snapToGrid: true,
+      cell: 0.1,
+      discreteTurns: true,
+      turnStepDeg: 15,
+      attachToSurface: true,
+      palette: ['wall', 'floor', 'cube', 'cylinder', 'ramp', 'object'],
+    },
+    transform: {
+      snapMove: true,
+      snapRotate: true,
+      rotateStepDeg: 15,
+      allowFreeTilt: true,
+      allowScale: true,
+    },
+    sculpt: {
+      enabled: false,
+      snapToGrid: true,
+    },
+    viewport: {
+      showGrid: true,
+      gridCell: 0.1,
+      gridExtent: 20,
+      showRotateGizmo: true,
+    },
+  },
+};
+
 export const WORKSPACE_PROFILES: Record<string, WorkspaceProfile> = {
   [SIMPLE_BUILDER_PROFILE.id]: SIMPLE_BUILDER_PROFILE,
   [FREEFORM_MESH_PROFILE.id]: FREEFORM_MESH_PROFILE,
+  [PRECISION_PROFILE.id]: PRECISION_PROFILE,
 };
 
 /**
