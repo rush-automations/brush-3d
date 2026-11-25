@@ -20,7 +20,7 @@ export interface SyncableDocument {
   splats(): Float32Array;
   splatColors(): Uint8Array;
   scene(): { instances: SceneInstanceLike[] };
-  instanceMatrix?(id: string): Float32Array | number[];
+  instanceTransform?(id: string): Float32Array | number[] | null | undefined;
   loadedObjects?(): string[];
   objectPositions?(key: string): Float32Array;
   objectColors?(key: string): Uint8Array;
@@ -102,13 +102,12 @@ export function syncDocumentToViewport(
   const instances = doc.scene().instances;
   const signature = instanceSignature(instances);
   const instancesChanged = signature !== options.previousSignature;
-  if (instancesChanged && viewport.setInstances && doc.instanceMatrix) {
+  if (instancesChanged && viewport.setInstances && doc.instanceTransform) {
     viewport.setInstances(
-      instances.map((i) => ({
-        id: i.id,
-        object: i.object,
-        matrix: doc.instanceMatrix!(i.id),
-      })),
+      instances.flatMap((i) => {
+        const matrix = doc.instanceTransform!(i.id);
+        return matrix ? [{ id: i.id, object: i.object, matrix }] : [];
+      }),
     );
   }
   return { instances, signature, instancesChanged };
