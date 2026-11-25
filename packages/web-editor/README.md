@@ -8,3 +8,5 @@ Reusable browser viewport and editor interaction kit for applications built on `
 - **`syncDocumentToViewport`** (`src/sync.ts`) — Syncs a `brush-wasm` `Document` (surface mesh, splats, embedded object meshes, and scene instances) into a `Viewport` without hard-coupling to a specific WASM import path.
 - **`CameraFlightController`** (`src/camera-flight.ts`) — Smooth WASD / Arrow / Space-Shift / Q-E camera flight controller.
 - **`SelectController`** (`src/select-controller.ts`) — Framework-agnostic pointer controller for object selection, additive multi-select, box-select marquee, horizontal drag translation, and 3-axis rotate-ring gizmo drags backed by `Document` preview sessions (`beginPreview` / `updatePreview` / `commitPreview` / `cancelPreview`).
+- **`WorkspaceSession` & Composable Policies** (`src/policies.ts`) — Composable interaction policies (`SIMPLE_BUILDER_PROFILE`, `FREEFORM_MESH_PROFILE`, `composePolicy`) so distinct mental models (grid-snapped block building vs freeform sculpting/mesh editing) operate on the exact same `Document` and `.brush` project without conversion or data loss.
+

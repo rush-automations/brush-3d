@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Brush Simple Builder</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <aside class="panel">
+      <h1>Simple Builder</h1>
+      <p class="muted" id="version"></p>
+
+      <section>
+        <h2>Project (.brush)</h2>
+        <div class="row">
+          <label class="button">Open .brush / PLY<input type="file" id="file" accept=".brush,.ply,.obj" hidden /></label>
+          <button id="saveBrush">Save .brush</button>
+        </div>
+        <div class="row">
+          <button id="starter">Starter cabin</button>
+          <button id="blank">Blank</button>
+        </div>
+      </section>
+
+      <section>
+        <h2>Workspace policy</h2>
+        <div class="tools" id="profiles">
+          <button data-profile="simple-builder" aria-pressed="true">Simple Builder</button>
+          <button data-profile="freeform-mesh" aria-pressed="false">Freeform</button>
+        </div>
+        <div class="row">
+          <label class="check"><input type="checkbox" id="snapToggle" checked /> Grid snap</label>
+          <label class="check"><input type="checkbox" id="gridToggle" checked /> Grid</label>
+        </div>
+        <label>
+          Cell
+          <select id="cellSize">
+            <option value="0.25">0.25 m</option>
+            <option value="0.5" selected>0.50 m</option>
+            <option value="1">1.00 m</option>
+          </select>
+        </label>
+      </section>
+
+      <section>
+        <h2>Tool</h2>
+        <div class="tools" id="modes">
+          <button data-mode="build" aria-pressed="true">Build</button>
+          <button data-mode="select" aria-pressed="false">Select</button>
+          <button data-mode="sculpt" aria-pressed="false">Sculpt</button>
+          <button data-mode="orbit" aria-pressed="false">Orbit</button>
+        </div>
+      </section>
+
+      <section id="buildSection">
+        <h2>Piece palette</h2>
+        <div class="tools" id="palette"></div>
+        <div class="row">
+          <button id="rotatePiece" title="R">Rotate 90° (<span id="turnReadout">0°</span>)</button>
+          <label class="check">Color <input type="color" id="color" value="#d97706" /></label>
+        </div>
+      </section>
+
+      <section>
+        <h2>Document</h2>
+        <dl id="stats"></dl>
+        <div class="row">
+          <button id="undo" title="Ctrl+Z">Undo</button>
+          <button id="redo" title="Ctrl+Shift+Z">Redo</button>
+        </div>
+      </section>
+    </aside>
+
+    <main>
+      <div id="view" class="viewport-host"></div>
+      <div class="status" id="status">Left-click to place a block · R to rotate · Right-drag to orbit · WASD to fly</div>
+    </main>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

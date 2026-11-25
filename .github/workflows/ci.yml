@@ -46,6 +46,9 @@ jobs:
       - name: Demo builds
         working-directory: apps/demo
         run: bun install && bun run build
+      - name: Simple builder builds
+        working-directory: apps/builder
+        run: bun install && bun run build
 
   licenses:
     runs-on: ubuntu-latest
