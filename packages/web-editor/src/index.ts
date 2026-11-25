@@ -42,3 +42,23 @@ export {
   type SelectTransformMath,
   type TurnReadout,
 } from './select-controller';
+export {
+  FREEFORM_MESH_PROFILE,
+  SIMPLE_BUILDER_PROFILE,
+  WORKSPACE_PROFILES,
+  WorkspaceSession,
+  composePolicy,
+  type InteractionPolicy,
+  type InteractionPolicyPatch,
+  type PieceKind,
+  type PlacementPolicy,
+  type PolicyViewportTarget,
+  type SculptPolicy,
+  type TransformPolicy,
+  type ViewportPolicy,
+  type WorkspaceChangeListener,
+  type WorkspaceDocumentLike,
+  type WorkspaceMode,
+  type WorkspaceProfile,
+} from './policies';
+
