@@ -62,4 +62,17 @@ export {
   type WorkspaceMode,
   type WorkspaceProfile,
 } from './policies';
+export {
+  ExtensionRegistry,
+  type AssetDescriptor,
+  type AssetProviderExtension,
+  type CapabilityFlag,
+  type EngineCapabilities,
+  type ExtensionDocument,
+  type PolicyExtension,
+  type RendererExtension,
+  type ToolContext,
+  type ToolExtension,
+} from './extensions';
+
 

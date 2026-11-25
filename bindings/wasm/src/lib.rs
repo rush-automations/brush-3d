@@ -71,6 +71,24 @@ export type ConstraintKind =
 export interface ConstraintRecord { id: string; kind: ConstraintKind; enabled?: boolean }
 export interface ConstraintConflict { constraintId: string; reason: string }
 export interface SolveReport { updatedFeatures: string[]; conflicts: ConstraintConflict[] }
+export interface Capabilities {
+  engineVersion: string;
+  opsVersion: string;
+  projectFormatVersion: number;
+  formats: { read: string[]; write: string[] };
+  features: {
+    transactions: boolean;
+    previews: boolean;
+    revisionGuards: boolean;
+    workplanes: boolean;
+    editableFeatures: boolean;
+    persistentConstraints: boolean;
+    splats: boolean;
+    linkedInstances: boolean;
+  };
+  featureKinds: string[];
+  constraintKinds: string[];
+}
 "#;
 
 fn to_js<T: Serialize>(v: &T) -> Result<JsValue, JsError> {
@@ -1055,4 +1073,10 @@ pub fn measure_distance(
     let a: [f32; 3] = from_js(a, "a")?;
     let b: [f32; 3] = from_js(b, "b")?;
     to_js(&precision::measure_distance(a, b))
+}
+
+/// Versioned capability manifest describing supported ops, formats, and precision features.
+#[wasm_bindgen(unchecked_return_type = "Capabilities")]
+pub fn capabilities() -> Result<JsValue, JsError> {
+    to_js(&brush_engine::capabilities())
 }
