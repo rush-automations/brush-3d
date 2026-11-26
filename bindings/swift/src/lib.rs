@@ -1125,8 +1125,8 @@ pub unsafe extern "C" fn brush_document_combine_instances(
     guard(error, ptr::null_mut(), || {
         let d = doc_mut(doc)?;
         d.writable()?;
-        let ids: Vec<String> = serde_json::from_str(str_arg(ids_json, "ids")?)
-            .map_err(|e| format!("bad ids: {e}"))?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
         let key = str_arg(object_key, "object_key")?.to_string();
         let inst = if instance_id.is_null() {
             None
@@ -1191,8 +1191,8 @@ pub unsafe extern "C" fn brush_document_align_selection(
     guard(error, -1, || {
         let d = doc_mut(doc)?;
         d.writable()?;
-        let ids: Vec<String> = serde_json::from_str(str_arg(ids_json, "ids")?)
-            .map_err(|e| format!("bad ids: {e}"))?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
         let axis: AlignAxis = serde_json::from_str(str_arg(axis_json, "axis")?)
             .map_err(|e| format!("bad axis: {e}"))?;
         let mode: AlignMode = serde_json::from_str(str_arg(mode_json, "mode")?)
@@ -1224,8 +1224,8 @@ pub unsafe extern "C" fn brush_document_distribute_selection(
     guard(error, -1, || {
         let d = doc_mut(doc)?;
         d.writable()?;
-        let ids: Vec<String> = serde_json::from_str(str_arg(ids_json, "ids")?)
-            .map_err(|e| format!("bad ids: {e}"))?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
         let axis: AlignAxis = serde_json::from_str(str_arg(axis_json, "axis")?)
             .map_err(|e| format!("bad axis: {e}"))?;
         let actor: Actor = if actor_json.is_null() {
@@ -1335,7 +1335,10 @@ pub unsafe extern "C" fn brush_document_repair_feature(
             serde_json::from_str(str_arg(actor_json, "actor")?)
                 .map_err(|e| format!("bad actor: {e}"))?
         };
-        let rec = d.doc.repair_feature(fid, actor).map_err(|e| e.to_string())?;
+        let rec = d
+            .doc
+            .repair_feature(fid, actor)
+            .map_err(|e| e.to_string())?;
         d.object_normals.remove(&rec.object_key);
         d.changed();
         json(&rec)
