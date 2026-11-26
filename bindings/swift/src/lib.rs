@@ -969,7 +969,10 @@ pub unsafe extern "C" fn brush_document_commit_transaction(
     guard(error, ptr::null_mut(), || {
         let d = doc_mut(doc)?;
         d.writable()?;
-        let applied = d.doc.commit_transaction().map_err(|e| e.to_string())?;
+        let applied = d
+            .doc
+            .commit_transaction()
+            .ok_or_else(|| "no open transaction".to_string())?;
         if applied.changed {
             d.changed();
         }
@@ -986,7 +989,7 @@ pub unsafe extern "C" fn brush_document_cancel_transaction(
     guard(error, false, || {
         let d = doc_mut(doc)?;
         d.writable()?;
-        let cancelled = d.doc.cancel_transaction().map_err(|e| e.to_string())?;
+        let cancelled = d.doc.cancel_transaction();
         if cancelled {
             d.changed();
         }
