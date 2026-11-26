@@ -97,8 +97,9 @@ fn obj_round_trips_colours_and_handles_polygons_and_negative_indices() {
 }
 
 #[test]
-fn glb_has_a_valid_container() {
-    let g = write_glb(&tri(), "surface");
+fn glb_has_a_valid_container_and_round_trips() {
+    let m = tri();
+    let g = write_glb(&m, "surface");
     assert_eq!(&g[0..4], b"glTF");
     assert_eq!(
         u32::from_le_bytes(g[8..12].try_into().unwrap()) as usize,
@@ -109,6 +110,91 @@ fn glb_has_a_valid_container() {
     let doc: serde_json::Value = serde_json::from_slice(&g[20..20 + json_len]).unwrap();
     assert_eq!(doc["accessors"][2]["count"], 3);
     assert_eq!(Format::sniff(&g), Some(Format::Glb));
+
+    let (back, report) = read(&g, Format::Glb).unwrap();
+    assert_eq!(back.positions, m.positions);
+    assert_eq!(back.colors, m.colors);
+    assert_eq!(back.indices, m.indices);
+    assert_eq!(report, ReadReport::default());
+
+    // Truncated and invalid GLBs are rejected cleanly.
+    assert!(read_glb(&g[..10]).is_err());
+    assert!(read_glb(&g[..g.len() - 4]).is_err());
+    assert!(read_glb(b"not a glb container").is_err());
+}
+
+#[test]
+fn glb_applies_node_transforms_and_rejects_draco() {
+    let positions: Vec<u8> = [0.0f32, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]
+        .iter()
+        .flat_map(|f| f.to_le_bytes())
+        .collect();
+    let indices: Vec<u8> = [0u16, 1, 2].iter().flat_map(|i| i.to_le_bytes()).collect();
+    let mut bin = positions.clone();
+    while bin.len() % 4 != 0 {
+        bin.push(0);
+    }
+    let idx_offset = bin.len();
+    bin.extend_from_slice(&indices);
+    while bin.len() % 4 != 0 {
+        bin.push(0);
+    }
+
+    let make_glb = |doc: serde_json::Value| -> Vec<u8> {
+        let mut json_bytes = serde_json::to_vec(&doc).unwrap();
+        while json_bytes.len() % 4 != 0 {
+            json_bytes.push(b' ');
+        }
+        let total = 28 + json_bytes.len() + bin.len();
+        let mut out = Vec::with_capacity(total);
+        out.extend_from_slice(&0x4654_6c67u32.to_le_bytes());
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&(total as u32).to_le_bytes());
+        out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x4e4f_534au32.to_le_bytes());
+        out.extend_from_slice(&json_bytes);
+        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        out.extend_from_slice(&0x004e_4942u32.to_le_bytes());
+        out.extend_from_slice(&bin);
+        out
+    };
+
+    let transformed = make_glb(serde_json::json!({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"translation": [2.0, 3.0, 4.0], "scale": [2.0, 2.0, 2.0], "mesh": 0}],
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0}, "indices": 1, "material": 0}]}],
+        "materials": [{"pbrMetallicRoughness": {"baseColorFactor": [1.0, 0.5, 0.0, 1.0]}}],
+        "accessors": [
+            {"bufferView": 0, "componentType": 5126, "count": 3, "type": "VEC3"},
+            {"bufferView": 1, "componentType": 5123, "count": 3, "type": "SCALAR"},
+        ],
+        "bufferViews": [
+            {"buffer": 0, "byteOffset": 0, "byteLength": positions.len()},
+            {"buffer": 0, "byteOffset": idx_offset, "byteLength": indices.len()},
+        ],
+        "buffers": [{"byteLength": bin.len()}],
+    }));
+
+    let (mesh, _) = read_glb(&transformed).unwrap();
+    assert_eq!(mesh.vert(0), [2.0, 3.0, 4.0]);
+    assert_eq!(mesh.vert(1), [4.0, 3.0, 4.0]);
+    assert_eq!(mesh.vert(2), [2.0, 5.0, 4.0]);
+    assert_eq!(mesh.color(0), [255, 128, 0]);
+
+    let draco = make_glb(serde_json::json!({
+        "asset": {"version": "2.0"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"mesh": 0}],
+        "meshes": [{"primitives": [{
+            "attributes": {"POSITION": 0},
+            "extensions": {"KHR_draco_mesh_compression": {"bufferView": 0}}
+        }]}],
+    }));
+    let err = read_glb(&draco).unwrap_err().to_string();
+    assert!(err.contains("Draco"));
 }
 
 #[test]

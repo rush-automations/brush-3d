@@ -215,6 +215,10 @@ export class Viewport {
   private readonly planLineMaterial = new THREE.LineBasicMaterial({ color: 0x007a52, depthTest: false });
   private readonly planDotMaterial = new THREE.MeshBasicMaterial({ color: 0x007a52, depthTest: false });
   private readonly planFillMaterial = new THREE.MeshBasicMaterial({ color: 0x007a52, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false });
+  // 3D point-to-point distance measurement line & endpoint markers.
+  private readonly measureGroup = new THREE.Group();
+  private readonly measureLineMaterial = new THREE.LineBasicMaterial({ color: 0xf97316, depthTest: false, transparent: true, opacity: 1 });
+  private readonly measureDotMaterial = new THREE.MeshBasicMaterial({ color: 0xf97316, depthTest: false, transparent: true, opacity: 1 });
   private cameraAnim: CameraAnimation | null = null;
   private modelVisible = true;
   // Studio overlay layers: LiDAR point clouds and photogrammetry camera frustums.
@@ -281,6 +285,8 @@ export class Viewport {
     this.gridGroup.visible = false;
     this.scene.add(this.planGroup);
     this.planGroup.renderOrder = 3;
+    this.scene.add(this.measureGroup);
+    this.measureGroup.renderOrder = 6;
     this.scene.add(this.instances);
     this.ghost.matrixAutoUpdate = false;
     this.ghost.visible = false;
@@ -780,12 +786,62 @@ export class Viewport {
     }
   }
 
+  /** Draws a 3D point-to-point distance line with endpoint markers while measuring. */
+  setMeasureLine(start: Vec3 | null, end: Vec3 | null, preview = false) {
+    this.clearGroup(this.measureGroup);
+    if (!start) return;
+    const opacity = preview ? 0.8 : 1;
+    this.measureLineMaterial.opacity = opacity;
+    this.measureDotMaterial.opacity = opacity;
+
+    const a = new THREE.Vector3(start[0], start[1], start[2]);
+    const scale = this.modelScale();
+    const dotRadius = Math.max(0.014, Math.min(0.065, scale * 0.011));
+    const tubeRadius = Math.max(0.004, dotRadius * 0.28);
+
+    const startDot = new THREE.Mesh(new THREE.SphereGeometry(dotRadius, 16, 12), this.measureDotMaterial);
+    startDot.position.copy(a);
+    startDot.renderOrder = 7;
+    this.measureGroup.add(startDot);
+
+    if (!end) return;
+    const b = new THREE.Vector3(end[0], end[1], end[2]);
+    const endDot = new THREE.Mesh(new THREE.SphereGeometry(dotRadius, 16, 12), this.measureDotMaterial);
+    endDot.position.copy(b);
+    endDot.renderOrder = 7;
+    this.measureGroup.add(endDot);
+
+    const delta = new THREE.Vector3().subVectors(b, a);
+    const len = delta.length();
+    if (len > 1e-5) {
+      const lineGeo = new THREE.BufferGeometry().setFromPoints([a, b]);
+      const line = new THREE.Line(lineGeo, this.measureLineMaterial);
+      line.renderOrder = 6;
+      this.measureGroup.add(line);
+
+      const tubeGeo = new THREE.CylinderGeometry(tubeRadius, tubeRadius, len, 10, 1);
+      const tube = new THREE.Mesh(tubeGeo, this.measureDotMaterial);
+      tube.position.copy(a).addScaledVector(delta, 0.5);
+      tube.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.clone().divideScalar(len));
+      tube.renderOrder = 6;
+      this.measureGroup.add(tube);
+    }
+  }
+
   private clearGroup(group: THREE.Group) {
     while (group.children.length) {
       const child = group.children[0];
       group.remove(child);
       if ('geometry' in child && child.geometry instanceof THREE.BufferGeometry) child.geometry.dispose();
-      if ('material' in child && child.material instanceof THREE.Material && child.material !== this.planLineMaterial && child.material !== this.planDotMaterial && child.material !== this.planFillMaterial) {
+      if (
+        'material' in child &&
+        child.material instanceof THREE.Material &&
+        child.material !== this.planLineMaterial &&
+        child.material !== this.planDotMaterial &&
+        child.material !== this.planFillMaterial &&
+        child.material !== this.measureLineMaterial &&
+        child.material !== this.measureDotMaterial
+      ) {
         child.material.dispose();
       }
     }
@@ -1027,6 +1083,9 @@ export class Viewport {
     this.planLineMaterial.dispose();
     this.planDotMaterial.dispose();
     this.planFillMaterial.dispose();
+    this.clearGroup(this.measureGroup);
+    this.measureLineMaterial.dispose();
+    this.measureDotMaterial.dispose();
     this.wireframeMaterial.dispose();
     for (const g of this.objects.values()) g.dispose();
     this.ghostOwned?.dispose();

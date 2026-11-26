@@ -11,7 +11,7 @@ mod obj;
 mod ply;
 pub mod project;
 
-pub use glb::write_glb;
+pub use glb::{read_glb, write_glb};
 pub use obj::{read_obj, write_obj};
 pub use ply::{read_ply, write_ply, PlyOptions};
 pub use project::{
@@ -83,12 +83,12 @@ impl Format {
     }
 }
 
-/// Reads PLY or OBJ.
+/// Reads PLY, OBJ, or binary glTF 2.0 (GLB).
 pub fn read(bytes: &[u8], format: Format) -> Result<(Mesh, ReadReport), IoError> {
     match format {
         Format::Ply => read_ply(bytes),
         Format::Obj => read_obj(bytes),
-        Format::Glb => Err(bad("reading GLB is not supported yet; export PLY or OBJ")),
+        Format::Glb => read_glb(bytes),
     }
 }
 

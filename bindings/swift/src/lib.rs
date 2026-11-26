@@ -267,7 +267,7 @@ pub unsafe extern "C" fn brush_document_open(
         } else {
             std::slice::from_raw_parts(bytes, len)
         };
-        let format = Format::sniff(data).ok_or("not a PLY or OBJ file")?;
+        let format = Format::sniff(data).ok_or("not a PLY, OBJ, or GLB file")?;
         let (mesh, report) = io::read(data, format).map_err(|e| e.to_string())?;
         let depth = undo_depth_for(&mesh, undo_budget);
         Ok(Box::into_raw(Box::new(BrushDocument::new(
@@ -736,7 +736,7 @@ pub unsafe extern "C" fn brush_document_set_object(
             return Err("no bytes".into());
         }
         let data = std::slice::from_raw_parts(bytes, len);
-        let format = Format::sniff(data).ok_or("not a PLY or OBJ file")?;
+        let format = Format::sniff(data).ok_or("not a PLY, OBJ, or GLB file")?;
         let (mesh, _) = io::read(data, format).map_err(|e| e.to_string())?;
         d.object_normals.remove(&key);
         d.doc.set_object(key, mesh);
