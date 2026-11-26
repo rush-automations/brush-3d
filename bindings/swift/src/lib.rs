@@ -21,7 +21,10 @@ use std::ptr;
 use brush_engine::io::{self, Format};
 use std::collections::BTreeMap;
 
-use brush_engine::{Actor, Dab, Document, Mesh, Op, Placement, Scene, DEFAULT_UNDO_DEPTH};
+use brush_engine::{
+    capabilities, precision, Actor, AlignAxis, AlignMode, BoxRegion, ConstraintRecord, Dab,
+    Document, FeatureKind, FeatureSpec, Mesh, Op, Placement, Scene, Workplane, DEFAULT_UNDO_DEPTH,
+};
 
 /// An open mesh: the engine document, plus the vertex normals and flat splat buffers last computed for display.
 pub struct BrushDocument {
@@ -202,6 +205,29 @@ pub extern "C" fn brush_ops_schema() -> *mut c_char {
     c_string(brush_engine::mesh::ops_schema().to_string())
 }
 
+/// Versioned capability manifest describing supported ops, formats, and precision features, as JSON.
+#[no_mangle]
+pub extern "C" fn brush_capabilities() -> *mut c_char {
+    json(&capabilities()).unwrap_or(ptr::null_mut())
+}
+
+/// Measures the exact 3D distance and per-axis delta from `a` to `b`, as JSON: `{"distance", "delta"}`.
+#[no_mangle]
+pub unsafe extern "C" fn brush_measure_distance(
+    a: *const f32,
+    b: *const f32,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        if a.is_null() || b.is_null() {
+            return Err("point is missing".into());
+        }
+        let pa = *(a as *const [f32; 3]);
+        let pb = *(b as *const [f32; 3]);
+        json(&precision::measure_distance(pa, pb))
+    })
+}
+
 /// Frees a string returned by the engine. NULL is fine.
 #[no_mangle]
 pub unsafe extern "C" fn brush_string_free(s: *mut c_char) {
@@ -241,7 +267,7 @@ pub unsafe extern "C" fn brush_document_open(
         } else {
             std::slice::from_raw_parts(bytes, len)
         };
-        let format = Format::sniff(data).ok_or("not a PLY or OBJ file")?;
+        let format = Format::sniff(data).ok_or("not a PLY, OBJ, or GLB file")?;
         let (mesh, report) = io::read(data, format).map_err(|e| e.to_string())?;
         let depth = undo_depth_for(&mesh, undo_budget);
         Ok(Box::into_raw(Box::new(BrushDocument::new(
@@ -710,7 +736,7 @@ pub unsafe extern "C" fn brush_document_set_object(
             return Err("no bytes".into());
         }
         let data = std::slice::from_raw_parts(bytes, len);
-        let format = Format::sniff(data).ok_or("not a PLY or OBJ file")?;
+        let format = Format::sniff(data).ok_or("not a PLY, OBJ, or GLB file")?;
         let (mesh, _) = io::read(data, format).map_err(|e| e.to_string())?;
         d.object_normals.remove(&key);
         d.doc.set_object(key, mesh);
@@ -894,6 +920,524 @@ pub unsafe extern "C" fn brush_document_place(
             .map_err(|e| format!("bad placement: {e}"))?;
         let op: Op = d.doc.place(&p).map_err(|e| e.to_string())?;
         json(&op)
+    })
+}
+
+// ---- transactions & revision ----
+
+/// Monotonic document revision, incremented on every committed change.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_revision(doc: *const BrushDocument) -> u64 {
+    doc.as_ref().map_or(0, |d| d.doc.revision())
+}
+
+/// Begins a transaction collapsing subsequent mutations into one undo step.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_begin_transaction(
+    doc: *mut BrushDocument,
+    label: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> bool {
+    guard(error, false, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let lbl = if label.is_null() {
+            None
+        } else {
+            Some(str_arg(label, "label")?.to_string())
+        };
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        d.doc
+            .begin_transaction(lbl, actor)
+            .map_err(|e| e.to_string())?;
+        Ok(true)
+    })
+}
+
+/// Commits the open transaction and returns `Applied` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_commit_transaction(
+    doc: *mut BrushDocument,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let applied = d
+            .doc
+            .commit_transaction()
+            .ok_or_else(|| "no open transaction".to_string())?;
+        if applied.changed {
+            d.changed();
+        }
+        json(&applied)
+    })
+}
+
+/// Cancels the open transaction, restoring the pre-transaction state.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_cancel_transaction(
+    doc: *mut BrushDocument,
+    error: *mut *mut c_char,
+) -> bool {
+    guard(error, false, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let cancelled = d.doc.cancel_transaction();
+        if cancelled {
+            d.changed();
+        }
+        Ok(cancelled)
+    })
+}
+
+// ---- island inspection & detach / join workflows ----
+
+/// Connected component (island) containing `start_face`, as JSON, or NULL if invalid.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_connected_component(
+    doc: *const BrushDocument,
+    start_face: u32,
+) -> *mut c_char {
+    let Some(d) = doc.as_ref() else {
+        return ptr::null_mut();
+    };
+    match d.doc.mesh().connected_component(start_face) {
+        Some(island) => json(&island).unwrap_or(ptr::null_mut()),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Deletes the connected island containing `start_face`. Returns `Applied` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_delete_island(
+    doc: *mut BrushDocument,
+    start_face: u32,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let applied = d
+            .doc
+            .delete_island(start_face, actor)
+            .map_err(|e| e.to_string())?;
+        if applied.changed {
+            d.changed();
+        }
+        json(&applied)
+    })
+}
+
+/// Detaches the connected island (or tangled cluster) containing `start_face` into a placed object.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_detach_island(
+    doc: *mut BrushDocument,
+    start_face: u32,
+    tangled: bool,
+    object_key: *const c_char,
+    instance_id: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let key = str_arg(object_key, "object_key")?.to_string();
+        let inst = if instance_id.is_null() {
+            None
+        } else {
+            Some(str_arg(instance_id, "instance_id")?.to_string())
+        };
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let part = d
+            .doc
+            .detach_island(start_face, tangled, key.clone(), inst, actor)
+            .map_err(|e| e.to_string())?;
+        d.object_normals.remove(&key);
+        d.changed();
+        json(&part)
+    })
+}
+
+/// Detaches geometry inside a `BoxRegion` (JSON) into a placed object.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_detach_box(
+    doc: *mut BrushDocument,
+    region_json: *const c_char,
+    object_key: *const c_char,
+    instance_id: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let region: BoxRegion = serde_json::from_str(str_arg(region_json, "region")?)
+            .map_err(|e| format!("bad region: {e}"))?;
+        let key = str_arg(object_key, "object_key")?.to_string();
+        let inst = if instance_id.is_null() {
+            None
+        } else {
+            Some(str_arg(instance_id, "instance_id")?.to_string())
+        };
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let part = d
+            .doc
+            .detach_box(region, key.clone(), inst, actor)
+            .map_err(|e| e.to_string())?;
+        d.object_normals.remove(&key);
+        d.changed();
+        json(&part)
+    })
+}
+
+/// Combines multiple placed instances into one new embedded object + instance.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_combine_instances(
+    doc: *mut BrushDocument,
+    ids_json: *const c_char,
+    object_key: *const c_char,
+    instance_id: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
+        let key = str_arg(object_key, "object_key")?.to_string();
+        let inst = if instance_id.is_null() {
+            None
+        } else {
+            Some(str_arg(instance_id, "instance_id")?.to_string())
+        };
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let part = d
+            .doc
+            .combine_instances(&ids, key.clone(), inst, actor)
+            .map_err(|e| e.to_string())?;
+        d.object_normals.remove(&key);
+        d.changed();
+        json(&part)
+    })
+}
+
+// ---- precision: workplanes, alignment, editable features, persistent constraints (Phase E) ----
+
+/// Current active workplane as JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_workplane(doc: *const BrushDocument) -> *mut c_char {
+    match doc.as_ref() {
+        Some(d) => json(&d.doc.workplane()).unwrap_or(ptr::null_mut()),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Sets the active workplane from JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_set_workplane(
+    doc: *mut BrushDocument,
+    workplane_json: *const c_char,
+    error: *mut *mut c_char,
+) -> bool {
+    guard(error, false, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let wp: Workplane = serde_json::from_str(str_arg(workplane_json, "workplane")?)
+            .map_err(|e| format!("bad workplane: {e}"))?;
+        d.doc.set_workplane(wp);
+        Ok(true)
+    })
+}
+
+/// Aligns selected instance IDs (JSON array) along `axis` ("x"|"y"|"z") and `mode` ("min"|"center"|"max").
+/// Returns the number of instances moved, or -1 on error.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_align_selection(
+    doc: *mut BrushDocument,
+    ids_json: *const c_char,
+    axis_json: *const c_char,
+    mode_json: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> i32 {
+    guard(error, -1, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
+        let axis: AlignAxis = serde_json::from_str(str_arg(axis_json, "axis")?)
+            .map_err(|e| format!("bad axis: {e}"))?;
+        let mode: AlignMode = serde_json::from_str(str_arg(mode_json, "mode")?)
+            .map_err(|e| format!("bad mode: {e}"))?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let n = d
+            .doc
+            .align_selection(&ids, axis, mode, actor)
+            .map_err(|e| e.to_string())?;
+        Ok(n as i32)
+    })
+}
+
+/// Evenly distributes selected instance IDs (JSON array) along `axis` ("x"|"y"|"z").
+/// Returns the number of instances moved, or -1 on error.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_distribute_selection(
+    doc: *mut BrushDocument,
+    ids_json: *const c_char,
+    axis_json: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> i32 {
+    guard(error, -1, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let ids: Vec<String> =
+            serde_json::from_str(str_arg(ids_json, "ids")?).map_err(|e| format!("bad ids: {e}"))?;
+        let axis: AlignAxis = serde_json::from_str(str_arg(axis_json, "axis")?)
+            .map_err(|e| format!("bad axis: {e}"))?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let n = d
+            .doc
+            .distribute_selection(&ids, axis, actor)
+            .map_err(|e| e.to_string())?;
+        Ok(n as i32)
+    })
+}
+
+/// Lists all parametric construction features as JSON array.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_list_features(doc: *const BrushDocument) -> *mut c_char {
+    match doc.as_ref() {
+        Some(d) => json(&d.doc.list_features()).unwrap_or(ptr::null_mut()),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Adds a new editable feature from `FeatureSpec` JSON. Returns `FeatureRecord` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_add_feature(
+    doc: *mut BrushDocument,
+    spec_json: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let spec: FeatureSpec = serde_json::from_str(str_arg(spec_json, "spec")?)
+            .map_err(|e| format!("bad feature spec: {e}"))?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let rec = d.doc.add_feature(spec, actor).map_err(|e| e.to_string())?;
+        d.object_normals.remove(&rec.object_key);
+        d.changed();
+        json(&rec)
+    })
+}
+
+/// Updates an existing feature's `FeatureKind` JSON. Returns `SolveReport` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_update_feature(
+    doc: *mut BrushDocument,
+    id: *const c_char,
+    kind_json: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let fid = str_arg(id, "id")?;
+        let kind: FeatureKind = serde_json::from_str(str_arg(kind_json, "kind")?)
+            .map_err(|e| format!("bad feature kind: {e}"))?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let report = d
+            .doc
+            .update_feature(fid, kind, actor)
+            .map_err(|e| e.to_string())?;
+        d.object_normals.clear();
+        d.changed();
+        json(&report)
+    })
+}
+
+/// Validates all features and returns updated `FeatureRecord[]` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_validate_features(doc: *mut BrushDocument) -> *mut c_char {
+    match doc.as_mut() {
+        Some(d) => json(&d.doc.validate_features()).unwrap_or(ptr::null_mut()),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Repairs a broken feature by ID. Returns `FeatureRecord` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_repair_feature(
+    doc: *mut BrushDocument,
+    id: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let fid = str_arg(id, "id")?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let rec = d
+            .doc
+            .repair_feature(fid, actor)
+            .map_err(|e| e.to_string())?;
+        d.object_normals.remove(&rec.object_key);
+        d.changed();
+        json(&rec)
+    })
+}
+
+/// Bakes a feature into the base mesh. Returns `FeatureRecord` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_bake_feature(
+    doc: *mut BrushDocument,
+    id: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let fid = str_arg(id, "id")?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let rec = d.doc.bake_feature(fid, actor).map_err(|e| e.to_string())?;
+        d.changed();
+        json(&rec)
+    })
+}
+
+/// Lists all persistent constraints as JSON array.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_list_constraints(doc: *const BrushDocument) -> *mut c_char {
+    match doc.as_ref() {
+        Some(d) => json(&d.doc.list_constraints()).unwrap_or(ptr::null_mut()),
+        None => ptr::null_mut(),
+    }
+}
+
+/// Adds a persistent constraint (`ConstraintRecord` JSON) and solves. Returns `SolveReport` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_add_constraint(
+    doc: *mut BrushDocument,
+    constraint_json: *const c_char,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let c: ConstraintRecord = serde_json::from_str(str_arg(constraint_json, "constraint")?)
+            .map_err(|e| format!("bad constraint: {e}"))?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let report = d.doc.add_constraint(c, actor).map_err(|e| e.to_string())?;
+        json(&report)
+    })
+}
+
+/// Removes a constraint by ID.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_remove_constraint(
+    doc: *mut BrushDocument,
+    id: *const c_char,
+    error: *mut *mut c_char,
+) -> bool {
+    guard(error, false, || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let cid = str_arg(id, "id")?;
+        Ok(d.doc.remove_constraint(cid))
+    })
+}
+
+/// Solves all persistent constraints. Returns `SolveReport` JSON.
+#[no_mangle]
+pub unsafe extern "C" fn brush_document_solve_constraints(
+    doc: *mut BrushDocument,
+    actor_json: *const c_char,
+    error: *mut *mut c_char,
+) -> *mut c_char {
+    guard(error, ptr::null_mut(), || {
+        let d = doc_mut(doc)?;
+        d.writable()?;
+        let actor: Actor = if actor_json.is_null() {
+            Actor::default()
+        } else {
+            serde_json::from_str(str_arg(actor_json, "actor")?)
+                .map_err(|e| format!("bad actor: {e}"))?
+        };
+        let report = d.doc.solve_constraints(actor).map_err(|e| e.to_string())?;
+        json(&report)
     })
 }
 

@@ -46,7 +46,7 @@ pub fn capabilities() -> Capabilities {
         ops_version: OPS_VERSION.to_string(),
         project_format_version: PROJECT_VERSION,
         formats: FormatCapabilities {
-            read: vec!["brush".into(), "ply".into(), "obj".into()],
+            read: vec!["brush".into(), "ply".into(), "obj".into(), "glb".into()],
             write: vec!["brush".into(), "ply".into(), "obj".into(), "glb".into()],
         },
         features: FeatureFlags {

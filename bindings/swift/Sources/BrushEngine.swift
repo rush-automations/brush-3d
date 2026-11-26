@@ -51,6 +51,96 @@ public enum BrushEngine {
         let v = decodeJSON(V.self, take(brush_version()))
         return (v?.engine ?? "?", v?.ops ?? "?")
     }
+
+    /// Versioned capability manifest describing supported ops, formats, and precision features (Phase F).
+    public static var capabilitiesJSON: String? {
+        take(brush_capabilities())
+    }
+
+    /// Measures the exact 3D distance and per-axis delta from `a` to `b` (Phase E).
+    public static func measureDistance(from a: SIMD3<Float>, to b: SIMD3<Float>) throws -> DistanceMeasurement {
+        let pa = [a.x, a.y, a.z], pb = [b.x, b.y, b.z]
+        let out = try attempt { err in brush_measure_distance(pa, pb, err) }
+        guard let m = decodeJSON(DistanceMeasurement.self, take(out)) else {
+            throw BrushEngineError(message: "could not read distance measurement")
+        }
+        return m
+    }
+}
+
+/// Exact 3D distance and axis deltas between two points.
+public struct DistanceMeasurement: Decodable, Equatable, Sendable {
+    public let distance: Float
+    public let delta: [Float]
+}
+
+/// Coordinate axis for alignment, distribution, and constraints (Phase E).
+public enum AlignAxis: String, Codable, CaseIterable, Sendable {
+    case x, y, z
+}
+
+/// Target alignment edge/center along an axis (Phase E).
+public enum AlignMode: String, Codable, CaseIterable, Sendable {
+    case min, center, max
+}
+
+/// A 2D construction plane in 3D world space for constrained numeric editing (Phase E).
+public struct Workplane: Codable, Equatable, Sendable {
+    public var id: String
+    public var name: String
+    public var origin: [Float]
+    public var normal: [Float]
+    public var xAxis: [Float]
+    public var yAxis: [Float]
+
+    public init(id: String, name: String, origin: [Float], normal: [Float], xAxis: [Float], yAxis: [Float]) {
+        self.id = id
+        self.name = name
+        self.origin = origin
+        self.normal = normal
+        self.xAxis = xAxis
+        self.yAxis = yAxis
+    }
+
+    public static func xz(y: Float = 0) -> Workplane {
+        Workplane(id: "wp:xz", name: String(format: "Floor (Y = %.2fm)", y),
+                  origin: [0, y, 0], normal: [0, 1, 0], xAxis: [1, 0, 0], yAxis: [0, 0, 1])
+    }
+
+    public static func xy(z: Float = 0) -> Workplane {
+        Workplane(id: "wp:xy", name: String(format: "Front (Z = %.2fm)", z),
+                  origin: [0, 0, z], normal: [0, 0, 1], xAxis: [1, 0, 0], yAxis: [0, 1, 0])
+    }
+
+    public static func yz(x: Float = 0) -> Workplane {
+        Workplane(id: "wp:yz", name: String(format: "Side (X = %.2fm)", x),
+                  origin: [x, 0, 0], normal: [1, 0, 0], xAxis: [0, 0, 1], yAxis: [0, 1, 0])
+    }
+}
+
+/// Result of solving persistent constraints or updating a feature (Phase E).
+public struct SolveReport: Decodable, Sendable {
+    public struct Conflict: Decodable, Identifiable, Sendable {
+        public let constraintId: String
+        public let reason: String
+        public var id: String { constraintId }
+    }
+    public let moved: [String]
+    public let conflicts: [Conflict]
+}
+
+/// Connected component (island) of faces in the document's own mesh.
+public struct MeshIsland: Decodable, Sendable {
+    public let faces: [UInt32]
+    public let vertices: Int
+}
+
+/// Result of detaching an island/box or combining instances into a placed object.
+public struct DetachedPart: Decodable, Sendable {
+    public let instanceId: String
+    public let objectKey: String
+    public let vertices: Int
+    public let faces: Int
 }
 
 /// The result of an op.
@@ -97,17 +187,21 @@ public struct Instance: Codable, Hashable, Sendable {
     public var object: String
     public var position: SIMD3<Double>
     public var yawDeg: Double
+    public var pitchDeg: Double
+    public var rollDeg: Double
     public var scale: Double
 
-    public init(id: String, object: String, position: SIMD3<Double>, yawDeg: Double = 0, scale: Double = 1) {
+    public init(id: String, object: String, position: SIMD3<Double>, yawDeg: Double = 0, pitchDeg: Double = 0, rollDeg: Double = 0, scale: Double = 1) {
         self.id = id
         self.object = object
         self.position = position
         self.yawDeg = yawDeg
+        self.pitchDeg = pitchDeg
+        self.rollDeg = rollDeg
         self.scale = scale
     }
 
-    private enum CodingKeys: String, CodingKey { case id, object, position, yawDeg, scale }
+    private enum CodingKeys: String, CodingKey { case id, object, position, yawDeg, pitchDeg, rollDeg, scale }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -117,6 +211,8 @@ public struct Instance: Codable, Hashable, Sendable {
         guard p.count == 3 else { throw DecodingError.dataCorruptedError(forKey: .position, in: c, debugDescription: "position needs 3 numbers") }
         position = SIMD3(p[0], p[1], p[2])
         yawDeg = try c.decodeIfPresent(Double.self, forKey: .yawDeg) ?? 0
+        pitchDeg = try c.decodeIfPresent(Double.self, forKey: .pitchDeg) ?? 0
+        rollDeg = try c.decodeIfPresent(Double.self, forKey: .rollDeg) ?? 0
         scale = try c.decodeIfPresent(Double.self, forKey: .scale) ?? 1
     }
 
@@ -126,6 +222,8 @@ public struct Instance: Codable, Hashable, Sendable {
         try c.encode(object, forKey: .object)
         try c.encode([position.x, position.y, position.z], forKey: .position)
         try c.encode(yawDeg, forKey: .yawDeg)
+        if pitchDeg != 0 { try c.encode(pitchDeg, forKey: .pitchDeg) }
+        if rollDeg != 0 { try c.encode(rollDeg, forKey: .rollDeg) }
         try c.encode(scale, forKey: .scale)
     }
 }
@@ -140,6 +238,7 @@ public struct Pick: Sendable {
     public let point: SIMD3<Float>
     public let normal: SIMD3<Float>
     public let t: Float
+    public let face: UInt32
     /// The placed instance hit, or nil for the document's own mesh.
     public let instance: String?
 }
@@ -405,7 +504,7 @@ public final class EngineDocument: @unchecked Sendable {
         var hit = BrushHit()
         let o = [origin.x, origin.y, origin.z], d = [direction.x, direction.y, direction.z]
         guard brush_document_raycast(handle, o, d, &hit) else { return nil }
-        return Pick(point: SIMD3(hit.point.0, hit.point.1, hit.point.2), normal: SIMD3(hit.normal.0, hit.normal.1, hit.normal.2), t: hit.t, instance: nil)
+        return Pick(point: SIMD3(hit.point.0, hit.point.1, hit.point.2), normal: SIMD3(hit.normal.0, hit.normal.1, hit.normal.2), t: hit.t, face: hit.face, instance: nil)
     }
 
     /// The nearest surface along the ray: the document's own mesh or a placed instance.
@@ -414,7 +513,7 @@ public final class EngineDocument: @unchecked Sendable {
         var instance: UnsafeMutablePointer<CChar>?
         let o = [origin.x, origin.y, origin.z], d = [direction.x, direction.y, direction.z]
         guard brush_document_pick(handle, o, d, &hit, &instance) else { return nil }
-        return Pick(point: SIMD3(hit.point.0, hit.point.1, hit.point.2), normal: SIMD3(hit.normal.0, hit.normal.1, hit.normal.2), t: hit.t, instance: take(instance))
+        return Pick(point: SIMD3(hit.point.0, hit.point.1, hit.point.2), normal: SIMD3(hit.normal.0, hit.normal.1, hit.normal.2), t: hit.t, face: hit.face, instance: take(instance))
     }
 
     /// The mesh as a file: "ply", "obj" or "glb". `flattened` copies placed objects in (for downloads); without it
@@ -486,5 +585,259 @@ public final class EngineDocument: @unchecked Sendable {
         let text = String(decoding: try JSONEncoder().encode(placement), as: UTF8.self)
         let out = try attempt { err in text.withCString { brush_document_place(handle, $0, err) } }
         return Op(json: take(out) ?? "{}")
+    }
+
+    // MARK: Transactions & revision (Phase B)
+
+    public var revision: UInt64 { brush_document_revision(handle) }
+
+    public func beginTransaction(label: String? = nil, actor: [String: String]? = nil) throws {
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        _ = try attempt { err in
+            let run: (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Bool? = { l, a in
+                brush_document_begin_transaction(self.handle, l, a, err) ? true : nil
+            }
+            if let label, let actorJSON {
+                return label.withCString { l in actorJSON.withCString { a in run(l, a) } }
+            } else if let label {
+                return label.withCString { l in run(l, nil) }
+            } else if let actorJSON {
+                return actorJSON.withCString { a in run(nil, a) }
+            }
+            return run(nil, nil)
+        }
+    }
+
+    @discardableResult
+    public func commitTransaction() throws -> Applied {
+        let out = try attempt { err in brush_document_commit_transaction(handle, err) }
+        let applied = decodeJSON(Applied.self, take(out))
+        if applied?.changed ?? true {
+            meshChanged()
+            sceneRevision += 1
+        }
+        guard let applied else { throw BrushEngineError(message: "the engine answered with something unreadable") }
+        return applied
+    }
+
+    @discardableResult
+    public func cancelTransaction() throws -> Bool {
+        let did = try attempt { err in brush_document_cancel_transaction(handle, err) ? true : nil }
+        if did {
+            meshChanged()
+            sceneRevision += 1
+        }
+        return did
+    }
+
+    // MARK: Islands & detach/combine (Phase B/E)
+
+    public func connectedComponent(startFace: UInt32) -> MeshIsland? {
+        decodeJSON(MeshIsland.self, take(brush_document_connected_component(handle, startFace)))
+    }
+
+    @discardableResult
+    public func deleteIsland(startFace: UInt32, actor: [String: String]? = nil) throws -> Applied {
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            if let actorJSON {
+                return actorJSON.withCString { brush_document_delete_island(handle, startFace, $0, err) }
+            }
+            return brush_document_delete_island(handle, startFace, nil, err)
+        }
+        let applied = decodeJSON(Applied.self, take(out))
+        if applied?.changed ?? true { meshChanged() }
+        guard let applied else { throw BrushEngineError(message: "the engine answered with something unreadable") }
+        return applied
+    }
+
+    @discardableResult
+    public func detachIsland(startFace: UInt32, tangled: Bool = false, objectKey: String, instanceID: String? = nil, actor: [String: String]? = nil) throws -> DetachedPart {
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            objectKey.withCString { key in
+                let call: (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? = { inst, act in
+                    brush_document_detach_island(self.handle, startFace, tangled, key, inst, act, err)
+                }
+                if let instanceID, let actorJSON {
+                    return instanceID.withCString { i in actorJSON.withCString { a in call(i, a) } }
+                } else if let instanceID {
+                    return instanceID.withCString { i in call(i, nil) }
+                } else if let actorJSON {
+                    return actorJSON.withCString { a in call(nil, a) }
+                }
+                return call(nil, nil)
+            }
+        }
+        meshChanged()
+        sceneRevision += 1
+        guard let part = decodeJSON(DetachedPart.self, take(out)) else {
+            throw BrushEngineError(message: "could not decode detached part")
+        }
+        return part
+    }
+
+    @discardableResult
+    public func combineInstances(_ ids: [String], objectKey: String, instanceID: String? = nil, actor: [String: String]? = nil) throws -> DetachedPart {
+        let idsJSON = String(decoding: try JSONEncoder().encode(ids), as: UTF8.self)
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            idsJSON.withCString { idsPtr in
+                objectKey.withCString { key in
+                    let call: (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? = { inst, act in
+                        brush_document_combine_instances(self.handle, idsPtr, key, inst, act, err)
+                    }
+                    if let instanceID, let actorJSON {
+                        return instanceID.withCString { i in actorJSON.withCString { a in call(i, a) } }
+                    } else if let instanceID {
+                        return instanceID.withCString { i in call(i, nil) }
+                    } else if let actorJSON {
+                        return actorJSON.withCString { a in call(nil, a) }
+                    }
+                    return call(nil, nil)
+                }
+            }
+        }
+        meshChanged()
+        sceneRevision += 1
+        guard let part = decodeJSON(DetachedPart.self, take(out)) else {
+            throw BrushEngineError(message: "could not decode combined part")
+        }
+        return part
+    }
+
+    // MARK: Precision: workplanes, alignment, editable features, constraints (Phase E)
+
+    public var workplane: Workplane {
+        decodeJSON(Workplane.self, take(brush_document_workplane(handle))) ?? .xz()
+    }
+
+    public func setWorkplane(_ workplane: Workplane) throws {
+        let text = String(decoding: try JSONEncoder().encode(workplane), as: UTF8.self)
+        _ = try attempt { err in text.withCString { brush_document_set_workplane(handle, $0, err) ? true : nil } }
+    }
+
+    @discardableResult
+    public func alignSelection(_ ids: [String], axis: AlignAxis, mode: AlignMode, actor: [String: String]? = nil) throws -> Int {
+        let idsJSON = String(decoding: try JSONEncoder().encode(ids), as: UTF8.self)
+        let axisJSON = String(decoding: try JSONEncoder().encode(axis), as: UTF8.self)
+        let modeJSON = String(decoding: try JSONEncoder().encode(mode), as: UTF8.self)
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let moved: Int32 = try attempt { err in
+            let r = idsJSON.withCString { i in
+                axisJSON.withCString { ax in
+                    modeJSON.withCString { m in
+                        if let actorJSON {
+                            return actorJSON.withCString { a in brush_document_align_selection(handle, i, ax, m, a, err) }
+                        }
+                        return brush_document_align_selection(handle, i, ax, m, nil, err)
+                    }
+                }
+            }
+            return r < 0 ? nil : r
+        }
+        if moved > 0 { sceneRevision += 1 }
+        return Int(moved)
+    }
+
+    @discardableResult
+    public func distributeSelection(_ ids: [String], axis: AlignAxis, actor: [String: String]? = nil) throws -> Int {
+        let idsJSON = String(decoding: try JSONEncoder().encode(ids), as: UTF8.self)
+        let axisJSON = String(decoding: try JSONEncoder().encode(axis), as: UTF8.self)
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let moved: Int32 = try attempt { err in
+            let r = idsJSON.withCString { i in
+                axisJSON.withCString { ax in
+                    if let actorJSON {
+                        return actorJSON.withCString { a in brush_document_distribute_selection(handle, i, ax, a, err) }
+                    }
+                    return brush_document_distribute_selection(handle, i, ax, nil, err)
+                }
+            }
+            return r < 0 ? nil : r
+        }
+        if moved > 0 { sceneRevision += 1 }
+        return Int(moved)
+    }
+
+    public func listFeaturesJSON() -> String {
+        take(brush_document_list_features(handle)) ?? "[]"
+    }
+
+    @discardableResult
+    public func addFeature(_ spec: [String: Any], actor: [String: String]? = nil) throws -> String {
+        let specJSON = try encodeJSON(spec)
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            specJSON.withCString { s in
+                if let actorJSON {
+                    return actorJSON.withCString { a in brush_document_add_feature(handle, s, a, err) }
+                }
+                return brush_document_add_feature(handle, s, nil, err)
+            }
+        }
+        meshChanged()
+        sceneRevision += 1
+        return take(out) ?? "{}"
+    }
+
+    @discardableResult
+    public func bakeFeature(id: String, actor: [String: String]? = nil) throws -> String {
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            id.withCString { i in
+                if let actorJSON {
+                    return actorJSON.withCString { a in brush_document_bake_feature(handle, i, a, err) }
+                }
+                return brush_document_bake_feature(handle, i, nil, err)
+            }
+        }
+        meshChanged()
+        sceneRevision += 1
+        return take(out) ?? "{}"
+    }
+
+    public func listConstraintsJSON() -> String {
+        take(brush_document_list_constraints(handle)) ?? "[]"
+    }
+
+    @discardableResult
+    public func addConstraint(_ constraint: [String: Any], actor: [String: String]? = nil) throws -> SolveReport {
+        let cJSON = try encodeJSON(constraint)
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            cJSON.withCString { c in
+                if let actorJSON {
+                    return actorJSON.withCString { a in brush_document_add_constraint(handle, c, a, err) }
+                }
+                return brush_document_add_constraint(handle, c, nil, err)
+            }
+        }
+        sceneRevision += 1
+        guard let report = decodeJSON(SolveReport.self, take(out)) else {
+            throw BrushEngineError(message: "could not decode solve report")
+        }
+        return report
+    }
+
+    @discardableResult
+    public func removeConstraint(id: String) throws -> Bool {
+        try attempt { err in id.withCString { brush_document_remove_constraint(handle, $0, err) ? true : nil } }
+    }
+
+    @discardableResult
+    public func solveConstraints(actor: [String: String]? = nil) throws -> SolveReport {
+        let actorJSON = try actor.map { try encodeJSON($0) }
+        let out = try attempt { err in
+            if let actorJSON {
+                return actorJSON.withCString { a in brush_document_solve_constraints(handle, a, err) }
+            }
+            return brush_document_solve_constraints(handle, nil, err)
+        }
+        sceneRevision += 1
+        guard let report = decodeJSON(SolveReport.self, take(out)) else {
+            throw BrushEngineError(message: "could not decode solve report")
+        }
+        return report
     }
 }

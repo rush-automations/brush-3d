@@ -264,7 +264,7 @@ fn bad_input_is_an_error_not_a_crash() {
         let mut e = ptr::null_mut();
         let d = brush_document_open(b"nope".as_ptr(), 4, false, 0, &mut e);
         assert!(d.is_null());
-        assert_eq!(take(e), "not a PLY or OBJ file");
+        assert_eq!(take(e), "not a PLY, OBJ, or GLB file");
         assert!(brush_document_apply(ptr::null_mut(), ptr::null(), ptr::null(), &mut e).is_null());
         take(e);
         brush_document_free(ptr::null_mut());
