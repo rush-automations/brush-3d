@@ -33,6 +33,8 @@ typedef struct BrushHit {
 /* Library */
 char *brush_version(void);      /* JSON: {"engine": "...", "ops": "..."} */
 char *brush_ops_schema(void);   /* JSON Schema of ops */
+char *brush_capabilities(void); /* JSON capability manifest (Phase F) */
+char *brush_measure_distance(const float a[3], const float b[3], char **error); /* JSON: {"distance", "delta"} */
 void brush_string_free(char *s);
 void brush_bytes_free(uint8_t *bytes, size_t len);
 
@@ -96,6 +98,35 @@ bool brush_document_object_transform(const BrushDocument *doc, const char *objec
 
 /* Building: the op (JSON) that builds a piece where the pointer is. See Placement in crates/brush-engine/src/place.rs. */
 char *brush_document_place(const BrushDocument *doc, const char *placement_json, char **error);
+
+/* Transactions & revision (Phase B) */
+uint64_t brush_document_revision(const BrushDocument *doc);
+bool brush_document_begin_transaction(BrushDocument *doc, const char *label, const char *actor_json, char **error);
+char *brush_document_commit_transaction(BrushDocument *doc, char **error);
+bool brush_document_cancel_transaction(BrushDocument *doc, char **error);
+
+/* Islands & detach/combine (Phase B/E) */
+char *brush_document_connected_component(const BrushDocument *doc, uint32_t start_face);
+char *brush_document_delete_island(BrushDocument *doc, uint32_t start_face, const char *actor_json, char **error);
+char *brush_document_detach_island(BrushDocument *doc, uint32_t start_face, bool tangled, const char *object_key, const char *instance_id, const char *actor_json, char **error);
+char *brush_document_detach_box(BrushDocument *doc, const char *region_json, const char *object_key, const char *instance_id, const char *actor_json, char **error);
+char *brush_document_combine_instances(BrushDocument *doc, const char *ids_json, const char *object_key, const char *instance_id, const char *actor_json, char **error);
+
+/* Precision: workplanes, alignment, editable features, persistent constraints (Phase E) */
+char *brush_document_workplane(const BrushDocument *doc);
+bool brush_document_set_workplane(BrushDocument *doc, const char *workplane_json, char **error);
+int32_t brush_document_align_selection(BrushDocument *doc, const char *ids_json, const char *axis_json, const char *mode_json, const char *actor_json, char **error);
+int32_t brush_document_distribute_selection(BrushDocument *doc, const char *ids_json, const char *axis_json, const char *actor_json, char **error);
+char *brush_document_list_features(const BrushDocument *doc);
+char *brush_document_add_feature(BrushDocument *doc, const char *spec_json, const char *actor_json, char **error);
+char *brush_document_update_feature(BrushDocument *doc, const char *id, const char *kind_json, const char *actor_json, char **error);
+char *brush_document_validate_features(BrushDocument *doc);
+char *brush_document_repair_feature(BrushDocument *doc, const char *id, const char *actor_json, char **error);
+char *brush_document_bake_feature(BrushDocument *doc, const char *id, const char *actor_json, char **error);
+char *brush_document_list_constraints(const BrushDocument *doc);
+char *brush_document_add_constraint(BrushDocument *doc, const char *constraint_json, const char *actor_json, char **error);
+bool brush_document_remove_constraint(BrushDocument *doc, const char *id, char **error);
+char *brush_document_solve_constraints(BrushDocument *doc, const char *actor_json, char **error);
 
 #ifdef __cplusplus
 }
